@@ -1,0 +1,10 @@
+{
+  "app_key": "REPLACE_WITH_DATASERVICE_APP_KEY",
+  "app_secret": "REPLACE_WITH_DATASERVICE_APP_SECRET",
+  "api_name": "cncbbi_general.autodeck__rpt_table_list",
+  "api_version": "n4rfgou3k5r5mhu7",
+  "base_url": "https://open-api.datasuite.shopee.io",
+  "queue": "cncbbi-scheduled",
+  "system_name": "autodeck_skill",
+  "end_user": "REPLACE_WITH_END_USER"
+}

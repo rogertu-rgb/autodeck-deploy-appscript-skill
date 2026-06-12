@@ -1,0 +1,22 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Local run artifacts
+outputs/
+*.log
+
+# OAuth and local credentials
+.env
+.env.*
+!*example*
+*authorized-user*.json
+*credentials*.json
+*token*.json
+dataservice.local.json
+google-oauth*.json
+
+# Do not commit generated Apps Script bundles containing concrete Sheet IDs
+appscript/
+Code.gs
+Index.html

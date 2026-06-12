@@ -1,0 +1,6 @@
+interface:
+  display_name: "AutoDeck Deploy AppScript"
+  short_description: "Generate and publish AutoDeck HTML reports"
+  default_prompt: "Use $autodeck-deploy-appscript to generate a seller visit diagnosis HTML report from my OAuth file and GGP name, then publish it to Apps Script."
+policy:
+  allow_implicit_invocation: true
