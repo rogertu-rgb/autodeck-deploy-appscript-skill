@@ -46,6 +46,8 @@ def deploy(
     output_dir: Optional[str] = None,
     domain: str = "shopee.com",
     dry_run: bool = False,
+    script_id: Optional[str] = None,
+    deployment_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     out_dir = Path(output_dir).expanduser().resolve() if output_dir else Path(html_path).expanduser().resolve().parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -66,8 +68,10 @@ def deploy(
     creds = build_credentials(oauth)
     script_service = build("script", "v1", credentials=creds)
 
-    project = script_service.projects().create(body={"title": title}).execute()
-    script_id = project["scriptId"]
+    updated_existing_project = bool(script_id)
+    if not script_id:
+        project = script_service.projects().create(body={"title": title}).execute()
+        script_id = project["scriptId"]
 
     script_service.projects().updateContent(
         scriptId=script_id,
@@ -85,20 +89,33 @@ def deploy(
         body={"description": "AutoDeck generated report"},
     ).execute()
 
-    deployment = script_service.projects().deployments().create(
-        scriptId=script_id,
-        body={
-            "versionNumber": version["versionNumber"],
-            "manifestFileName": "appsscript",
-            "description": "AutoDeck web app",
-        },
-    ).execute()
+    deployment_body = {
+        "versionNumber": version["versionNumber"],
+        "manifestFileName": "appsscript",
+        "description": "AutoDeck web app",
+    }
+    updated_existing_deployment = bool(deployment_id)
+    if deployment_id:
+        deployment = script_service.projects().deployments().update(
+            scriptId=script_id,
+            deploymentId=deployment_id,
+            body={
+                "deploymentConfig": deployment_body,
+            },
+        ).execute()
+    else:
+        deployment = script_service.projects().deployments().create(
+            scriptId=script_id,
+            body=deployment_body,
+        ).execute()
 
     dep_id = deployment["deploymentId"]
     return {
         "script_id": script_id,
         "deployment_id": dep_id,
         "version_number": version["versionNumber"],
+        "updated_existing_project": updated_existing_project,
+        "updated_existing_deployment": updated_existing_deployment,
         "web_app_url": deployment_url(dep_id, domain=domain),
         "code_gs": str(out_dir / "Code.gs"),
         "manifest": str(out_dir / "appsscript.json"),
@@ -114,6 +131,8 @@ def main() -> int:
     parser.add_argument("--title", required=True)
     parser.add_argument("--output-dir")
     parser.add_argument("--domain", default="shopee.com")
+    parser.add_argument("--script-id", help="Update an existing Apps Script project instead of creating a new one.")
+    parser.add_argument("--deployment-id", help="Update an existing Apps Script deployment so the Web App URL stays stable.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -126,6 +145,8 @@ def main() -> int:
         output_dir=args.output_dir,
         domain=args.domain,
         dry_run=args.dry_run,
+        script_id=args.script_id,
+        deployment_id=args.deployment_id,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
