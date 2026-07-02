@@ -13,6 +13,8 @@ from typing import Any, Dict, Optional
 from build_sections_adapter import run_build
 from create_report_sheet import create_or_update_report_sheet
 from deploy_appscript import deploy
+from enrich_commercial_sections import enrich_commercial_sections
+from enrich_shop_impact import enrich_shop_impact
 from oauth_check import check as check_oauth
 from query_raw_data import query_raw_data
 from render_html import render_index_html
@@ -53,6 +55,8 @@ def run(args) -> Dict[str, Any]:
     query_summary: Optional[Dict[str, Any]] = None
     sheet_summary: Optional[Dict[str, str]] = None
     build_summary: Optional[Dict[str, Any]] = None
+    shop_impact_summary: Optional[Dict[str, Any]] = None
+    commercial_sections_summary: Optional[Dict[str, Any]] = None
     report_ggp = args.ggp
 
     if args.data_mode in ("sdk", "datasuite", "bridge"):
@@ -102,6 +106,12 @@ def run(args) -> Dict[str, Any]:
         if build_summary.get("error"):
             raise RuntimeError(build_summary["error"])
 
+    shop_impact_summary = enrich_shop_impact(args.oauth, sheet_id, args.month)
+    commercial_sections_summary = enrich_commercial_sections(args.oauth, sheet_id, args.month)
+    if build_summary is not None:
+        build_summary["shop_impact_enrichment"] = shop_impact_summary
+        build_summary["commercial_sections_enrichment"] = commercial_sections_summary
+
     payload = read_sheet_payload(args.oauth, sheet_id)
     payload_path = out_dir / "sheet_payload.json"
     write_json(payload_path, payload)
@@ -118,6 +128,8 @@ def run(args) -> Dict[str, Any]:
         output_dir=str(artifacts_dir),
         domain=args.domain,
         dry_run=True,
+        script_id=args.script_id,
+        deployment_id=args.deployment_id,
     )
 
     validation = validate(
@@ -135,6 +147,8 @@ def run(args) -> Dict[str, Any]:
             "sheet": sheet_summary,
             "query": query_summary,
             "build": build_summary,
+            "shop_impact": shop_impact_summary,
+            "commercial_sections": commercial_sections_summary,
         }
         write_json(out_dir / "run_summary.json", summary)
         raise RuntimeError("Validation failed: " + "; ".join(validation["failures"]))
@@ -151,6 +165,8 @@ def run(args) -> Dict[str, Any]:
             output_dir=str(artifacts_dir),
             domain=args.domain,
             dry_run=False,
+            script_id=args.script_id,
+            deployment_id=args.deployment_id,
         )
 
     summary = {
@@ -162,6 +178,8 @@ def run(args) -> Dict[str, Any]:
         "sheet": sheet_summary,
         "query": query_summary,
         "build": build_summary,
+        "shop_impact": shop_impact_summary,
+        "commercial_sections": commercial_sections_summary,
         "payload": str(payload_path),
         "html": str(html_path),
         "validation": validation,
@@ -181,6 +199,8 @@ def main() -> int:
     parser.add_argument("--output-dir")
     parser.add_argument("--title")
     parser.add_argument("--domain", default="shopee.com")
+    parser.add_argument("--script-id", help="Update an existing Apps Script project instead of creating a new one.")
+    parser.add_argument("--deployment-id", help="Update an existing Apps Script deployment so the Web App URL stays stable.")
     parser.add_argument("--dry-run", action="store_true", help="Generate artifacts but do not create Apps Script deployment.")
     parser.add_argument("--skip-build", action="store_true", help="Render existing sec_* tabs without running build_sections.py.")
     parser.add_argument("--allow-validation-failures", action="store_true")
@@ -198,7 +218,7 @@ def main() -> int:
 
     parser.add_argument("--bridge", default=DEFAULT_BRIDGE)
     parser.add_argument("--asset-id", type=int)
-    parser.add_argument("--query-limit", type=int, default=2000)
+    parser.add_argument("--query-limit", type=int, default=0, help="SDK row cap. Use 0 for no local truncation.")
     parser.add_argument("--months-back", type=int, default=12)
     parser.add_argument("--build-script", default=DEFAULT_BUILD_SCRIPT)
     parser.add_argument("--l1")
