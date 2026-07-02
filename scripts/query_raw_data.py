@@ -94,21 +94,45 @@ WHERE ggp_account_name = {sql_quote(ggp)}
   AND year_month IN ({date_in(months)})
 """.strip(),
 
-        # ── Benchmark: site-level MoM (Section 1.1) — ~10 rows ──
+        # ── Benchmark: site-level MoM (Section 1.1) — Total category/price only ──
+        # Keep this aligned with raw_benchmark_total_site; the only difference is
+        # that site remains at each seller site instead of site = 'Total Site'.
         "raw_benchmark_site": f"""
 SELECT site, year_month,
-  AVG(mkt_adg_mom) AS mkt_adg_mom,
-  AVG(mkt_ado_mom) AS mkt_ado_mom,
-  AVG(mkt_mall_adg_mom) AS mkt_mall_adg_mom,
-  AVG(mkt_cb_adg_mom) AS mkt_cb_adg_mom,
-  AVG(mkt_local_adg_mom) AS mkt_local_adg_mom
-FROM (
-{benchmark_sql}
-) t
+  MAX(mom_mkt_adg_pct) * 100 AS mkt_adg_mom,
+  MAX(mom_mkt_ado_pct) * 100 AS mkt_ado_mom,
+  MAX(mom_mkt_mall_adg_pct) * 100 AS mkt_mall_adg_mom,
+  MAX(mom_mkt_cb_adg_pct) * 100 AS mkt_cb_adg_mom,
+  MAX(mom_mkt_local_adg_pct) * 100 AS mkt_local_adg_mom
+FROM cncbbi_general.autodeck__site_bu_benchmark_rpt
 WHERE site IN {seller_sites_subquery}
+  AND l1 = 'Total'
+  AND l2 = 'Total'
+  AND l3 = 'Total'
+  AND price_band = 'Total'
   AND year_month IN ({date_in(months)})
   AND seller_type = 'CNCB'
 GROUP BY site, year_month
+ORDER BY site, year_month
+""".strip(),
+
+        # ── Benchmark: Shopee overall MoM curve for Section 1.0 ──
+        "raw_benchmark_total_site": f"""
+SELECT year_month, seller_type,
+  MAX(mom_mkt_adg_pct) * 100 AS shopee_adg_mom,
+  MAX(mom_mkt_ado_pct) * 100 AS shopee_ado_mom,
+  MAX(mom_mkt_mall_adg_pct) * 100 AS shopee_mall_adg_mom,
+  MAX(mom_mkt_cb_adg_pct) * 100 AS shopee_cb_adg_mom,
+  MAX(mom_mkt_local_adg_pct) * 100 AS shopee_local_adg_mom
+FROM cncbbi_general.autodeck__site_bu_benchmark_rpt
+WHERE site = 'Total Site'
+  AND l1 = 'Total'
+  AND l2 = 'Total'
+  AND l3 = 'Total'
+  AND price_band = 'Total'
+  AND year_month IN ({date_in(months)})
+GROUP BY year_month, seller_type
+ORDER BY year_month, seller_type
 """.strip(),
 
         # ── Benchmark: site×L1 MoM (Section 1.2, 1.3) — ~200 rows ──
@@ -172,14 +196,14 @@ WHERE site IN {seller_sites_subquery}
 GROUP BY site, l1, l2, l3, price_band, year_month
 """.strip(),
 
-        # ── Table C: item data (top 50 per site×L3) ──
+        # ── Table C: item data (top 50 per site×L3, current month only — m1_* in same row) ──
         "raw_dws_item": f"""
 SELECT * FROM (
   SELECT *,
     ROW_NUMBER() OVER (PARTITION BY site, l3 ORDER BY mtd_adg DESC) AS rn
   FROM cncbbi_general.autodeck__dws_item_rpt_mi
   WHERE ggp_account_name = {sql_quote(ggp)}
-    AND year_month IN ({date_in(current_prev)})
+    AND year_month = DATE '{month}-01'
 ) t
 WHERE rn <= 50
 """.strip(),
@@ -272,40 +296,28 @@ def build_sdk_client(config: DataServiceConfig):
     client = Client().create() \
         .appKey(config.app_key) \
         .appSecret(config.app_secret) \
-        .env(config.base_url) \
+        .scope([config.api_name]) \
         .systemName(config.system_name) \
         .endUser(config.end_user) \
         .timeout(30) \
         .refresh()
     return client, QueryConfiguration
-def run_sdk_sql(client: Any, query_configuration_cls: Any, config: DataServiceConfig, sql: str, use_personal: bool = False) -> List[Dict[str, Any]]:
-    if use_personal:
-        # PERSONAL_PRESTO: no 2000-row limit. Uses client.personalCall().
-        from dataservice.body import Body, PersonalPayload
-        payload = PersonalPayload(sql=sql, prestoQueue=config.queue, idcRegion="SG", priority=3)
-        body = Body(personalPayload=payload)
-        client._queryPattern = 4
-        rows: List[Dict[str, Any]] = []
-        for shard in client.personalCall(body):
-            for row in shard:
-                if isinstance(row, dict) and isinstance(row.get("values"), dict):
-                    rows.append(row["values"])
-                elif isinstance(row, dict):
-                    rows.append(row)
-        return rows
 
-    body = {
-        "prestoPayload": {
-            "expressions": [{"parameterName": "SQL", "value": sql}],
-            "prestoQueueName": config.queue,
-        }
-    }
+
+def run_sdk_sql(client: Any, query_configuration_cls: Any, config: DataServiceConfig, sql: str, use_personal: bool = False) -> List[Dict[str, Any]]:
+    """Execute SQL via OLAP query pattern. use_personal parameter kept for signature compat, ignored."""
+    from dataservice.body import Expressions, Body as DSBody
+    expressions = Expressions() \
+        .addExpression(parameterName="SQL", value=sql) \
+        .getExpressions()
+    body = DSBody(expressions=expressions).__dict__
+
     query_config = query_configuration_cls(
         apiName=config.api_name,
         version=config.api_version,
-        requestBody=body,
-        queryPattern=query_configuration_cls.QueryPattern.OLAP,
         enableCache=config.enable_cache,
+        queryPattern=query_configuration_cls.QueryPattern.OLAP,
+        requestBody=body,
         prestoQueueName=config.queue,
         network=config.base_url,
     )
@@ -392,88 +404,245 @@ LIMIT 20
     }
 
 
-PAGE_SIZE = 2000
+ROW_LIMIT = 20_000  # OLAP cap with scope; split any capped raw into smaller deterministic slices.
+SPLITTABLE_RAW_NAMES = {"raw_dws_shop", "raw_benchmark_price"}
+SPLIT_FALLBACK_DIMS_BY_NAME = {
+    "raw_dws_shop": ("year_month", "l1", "l2", "l3"),
+    "raw_benchmark_site": ("year_month",),
+    "raw_benchmark_l1": ("year_month", "l1"),
+    "raw_benchmark_l2": ("year_month", "l1", "l2"),
+    "raw_benchmark_l3": ("year_month", "l1", "l2", "l3"),
+    "raw_benchmark_price": ("year_month", "l1", "l2", "l3", "price_band"),
+}
 
 
-def run_sdk_count(client: Any, query_configuration_cls: Any, config: DataServiceConfig, sql: str) -> int:
-    """Run a COUNT query to get total rows."""
-    count_sql = f"SELECT COUNT(*) AS cnt FROM (\n{sql}\n) t"
-    rows = run_sdk_sql(client, query_configuration_cls, config, count_sql)
-    if rows:
-        return int(rows[0].get("cnt", 0))
-    return 0
+def _extract_year_months(sql: str) -> List[str]:
+    """Pull all DATE 'YYYY-MM-DD' literals from a SQL string."""
+    return sorted(set(re.findall(r"DATE '(\d{4}-\d{2}-\d{2})'", sql)))
 
 
-def run_sdk_sql_paginated(
-    client: Any, query_configuration_cls: Any, config: DataServiceConfig,
-    sql: str, name: str
+def _extract_sites_sql(ggp: str, year_months: Optional[List[str]] = None) -> str:
+    """SQL to list distinct sites for a GGP from the shop table."""
+    sql = (
+        "SELECT DISTINCT site\n"
+        "FROM cncbbi_general.autodeck__dws_shop_rpt_mi\n"
+        f"WHERE ggp_account_name = {sql_quote(ggp)}"
+    )
+    if year_months:
+        sql += f"\n  AND year_month IN ({date_in(year_months)})"
+    return sql
+
+
+def _inject_where(sql: str, clause: str) -> str:
+    """Append an AND clause before the outer GROUP/ORDER/LIMIT, or at the end."""
+    s = sql.rstrip().rstrip(";").rstrip()
+    for kw in ("ORDER BY", "GROUP BY", "LIMIT", "WINDOW"):
+        idx = s.rfind(kw)
+        if idx >= 0:
+            return s[:idx] + f"  AND {clause}\n" + s[idx:]
+    return s + f"\n  AND {clause}"
+
+
+def _fetch_sites(client: Any, query_configuration_cls: Any, config: DataServiceConfig, ggp: str, year_months: Optional[List[str]] = None) -> List[str]:
+    """Resolve the list of sites for a GGP. Uses OLAP — returns at most ~15 rows, well under limit."""
+    rows = run_sdk_sql(client, query_configuration_cls, config, _extract_sites_sql(ggp, year_months), use_personal=False)
+    sites = sorted({str(r.get("site", "")).strip() for r in rows if str(r.get("site", "")).strip()})
+    if not sites:
+        raise RuntimeError(f"No sites found for GGP '{ggp}'")
+    return sites
+
+
+def _format_split_clause(column: str, value: Any) -> str:
+    if column == "year_month":
+        value_str = str(value)
+        if len(value_str) == 7:
+            value_str = f"{value_str}-01"
+        return f"{column} = DATE '{value_str[:10]}'"
+    return f"{column} = {sql_quote(str(value))}"
+
+
+def _fetch_distinct_values(
+    client: Any,
+    query_configuration_cls: Any,
+    config: DataServiceConfig,
+    sql: str,
+    column: str,
+    use_personal: bool = False,
+) -> List[str]:
+    distinct_sql = f"""
+SELECT DISTINCT {column}
+FROM (
+{sql.rstrip().rstrip(";")}
+) split_source
+WHERE {column} IS NOT NULL
+ORDER BY {column}
+""".strip()
+    rows = run_sdk_sql(client, query_configuration_cls, config, distinct_sql, use_personal=use_personal)
+    return sorted({str(row_value(row, column) or "").strip() for row in rows if str(row_value(row, column) or "").strip()})
+
+
+def _split_query_recursively(
+    client: Any,
+    query_configuration_cls: Any,
+    config: DataServiceConfig,
+    sql: str,
+    name: str,
+    dims: Tuple[str, ...],
+    fixed: Dict[str, Any],
+    detail: List[Dict[str, Any]],
+    use_personal: bool = False,
 ) -> List[Dict[str, Any]]:
-    """
-    Execute SQL with automatic pagination by year_month.
-    If the result hits the PAGE_SIZE limit, splits query into per-month batches.
-    """
-    # First attempt: run the full query
-    rows = run_sdk_sql(client, query_configuration_cls, config, sql)
-    if len(rows) < PAGE_SIZE:
+    if not dims:
+        rows = run_sdk_sql(client, query_configuration_cls, config, sql, use_personal=use_personal)
+        if len(rows) >= ROW_LIMIT:
+            raise RuntimeError(
+                f"{name} split still returned {len(rows)} rows after filters {fixed}. "
+                f"Need another split dimension before writing raw output."
+            )
+        detail.append({**fixed, "rows": len(rows)})
         return rows
 
-    print(f"  ⚠️ {name}: {len(rows)} rows hit limit, paginating by month...")
-
-    # Extract year_month values from the WHERE clause
-    ym_match = re.findall(r"DATE '(\d{4}-\d{2}-\d{2})'", sql)
-    if not ym_match:
-        # Try to get distinct months from a COUNT query
-        ym_sql = f"SELECT DISTINCT year_month FROM (\n{sql}\n) t ORDER BY year_month"
-        ym_rows = run_sdk_sql(client, query_configuration_cls, config, ym_sql)
-        ym_match = [r.get("year_month", "") for r in ym_rows if r.get("year_month")]
-        ym_match = [str(y)[:10] for y in ym_match if y]
-
-    if not ym_match:
-        print(f"  ⚠️ Cannot paginate {name}: no year_month values found")
-        return rows
-
-    # Paginate: one query per month
-    all_rows = []
-    base_sql = sql.rstrip(";").rstrip()
-    for ym in sorted(set(ym_match)):
-        # Replace the year_month IN (...) clause with a single month
-        paginated_sql = re.sub(
-            r"year_month IN \(.*?\)",
-            f"year_month = DATE '{ym}'",
-            base_sql
+    column = dims[0]
+    values = _fetch_distinct_values(client, query_configuration_cls, config, sql, column, use_personal=use_personal)
+    if not values:
+        return _split_query_recursively(
+            client,
+            query_configuration_cls,
+            config,
+            sql,
+            name,
+            dims[1:],
+            fixed,
+            detail,
+            use_personal=use_personal,
         )
-        if paginated_sql == base_sql:
-            # If no IN clause, try WHERE year_month BETWEEN approach
-            paginated_sql = f"SELECT * FROM (\n{base_sql}\n) t WHERE year_month = DATE '{ym}'"
 
-        batch_rows = run_sdk_sql(client, query_configuration_cls, config, paginated_sql)
-        all_rows.extend(batch_rows)
-        print(f"    {ym}: {len(batch_rows)} rows")
+    all_rows: List[Dict[str, Any]] = []
+    for value in values:
+        child_sql = _inject_where(sql, _format_split_clause(column, value))
+        child_rows = run_sdk_sql(client, query_configuration_cls, config, child_sql, use_personal=use_personal)
+        child_fixed = {**fixed, column: value}
+        if len(child_rows) >= ROW_LIMIT:
+            print(f"  ⚠️  {name} {child_fixed}: {len(child_rows)} rows hit {ROW_LIMIT}; splitting deeper...")
+            all_rows.extend(
+                _split_query_recursively(
+                    client,
+                    query_configuration_cls,
+                    config,
+                    child_sql,
+                    name,
+                    dims[1:],
+                    child_fixed,
+                    detail,
+                    use_personal=use_personal,
+                )
+            )
+        else:
+            all_rows.extend(child_rows)
+            detail.append({**child_fixed, "rows": len(child_rows)})
 
-    print(f"  ✅ {name}: {len(all_rows)} total rows from {len(set(ym_match))} months")
     return all_rows
 
 
-def run_sdk_query(client: Any, query_configuration_cls: Any, config: DataServiceConfig, name: str, sql: str, out_dir: Path, limit: int) -> Dict[str, Any]:
+def _run_site_split(
+    client: Any,
+    query_configuration_cls: Any,
+    config: DataServiceConfig,
+    sql: str,
+    sites: List[str],
+    year_months: List[str],
+    name: str,
+    use_personal: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Split first by site to avoid the DataService 20k row cap.
+    If one site still reaches the cap, split further by year_month/category fields.
+    """
+    all_rows: List[Dict[str, Any]] = []
+    detail: List[Dict[str, Any]] = []
+    fallback_dims = SPLIT_FALLBACK_DIMS_BY_NAME.get(name, ("year_month",))
+
+    for site in sites:
+        site_sql = _inject_where(sql, _format_split_clause("site", site))
+        site_rows = run_sdk_sql(client, query_configuration_cls, config, site_sql, use_personal=use_personal)
+        if len(site_rows) >= ROW_LIMIT:
+            print(f"  ⚠️  {name} site={site}: {len(site_rows)} rows hit {ROW_LIMIT}; splitting by month/category...")
+            split_dims = fallback_dims
+            if not year_months:
+                split_dims = tuple(dim for dim in split_dims if dim != "year_month")
+            all_rows.extend(
+                _split_query_recursively(
+                    client,
+                    query_configuration_cls,
+                    config,
+                    site_sql,
+                    name,
+                    split_dims,
+                    {"site": site},
+                    detail,
+                    use_personal=use_personal,
+                )
+            )
+        else:
+            all_rows.extend(site_rows)
+            detail.append({"site": site, "rows": len(site_rows)})
+
+    return all_rows, detail
+
+
+def run_sdk_query(client: Any, query_configuration_cls: Any, config: DataServiceConfig, name: str, sql: str, out_dir: Path, limit: int, ggp: str = "") -> Dict[str, Any]:
     sql_path = out_dir / f"{name}.sql"
     sql_path.write_text(sql, encoding="utf-8")
 
-    use_personal = (name == "raw_benchmark")
-    rows = run_sdk_sql(client, query_configuration_cls, config, sql, use_personal=use_personal)
+    # All queries use OLAP with scope. If DataService hits its 20k response cap,
+    # refetch via deterministic site-first slices and merge the slices locally.
+    should_split = name in SPLITTABLE_RAW_NAMES or name.startswith("raw_benchmark")
 
-    if limit and len(rows) > limit and limit > 0:
-        rows = rows[:limit]
+    rows = run_sdk_sql(client, query_configuration_cls, config, sql)
+    initial_rows = len(rows)
+    returned_rows = initial_rows
+    split_detail: Optional[List[Dict[str, Any]]] = None
+
+    if should_split and returned_rows >= ROW_LIMIT and ggp:
+        print(f"  ⚠️  {name}: {returned_rows} rows hit {ROW_LIMIT} limit — splitting by site...")
+        year_months = _extract_year_months(sql)
+        sites = _fetch_sites(client, query_configuration_cls, config, ggp, year_months)
+        rows, split_detail = _run_site_split(client, query_configuration_cls, config, sql, sites, year_months, name)
+        returned_rows = len(rows)
+        print(f"  ✅ {name}: {returned_rows} total rows from {len(sites)} sites")
+
     header, body = normalize_sdk_rows(rows)
+    truncated_by_local_limit = False
+    if limit and limit > 0 and len(body) > limit:
+        body = body[:limit]
+        truncated_by_local_limit = True
     csv_path = out_dir / f"{name}.csv"
     write_csv(csv_path, header, body)
-    return {"name": name, "backend": "sdk", "rows": len(body), "csv": str(csv_path), "sql": str(sql_path)}
+    result: Dict[str, Any] = {
+        "name": name,
+        "backend": "sdk",
+        "initial_rows": initial_rows,
+        "returned_rows": returned_rows,
+        "rows": len(body),
+        "written_rows": len(body),
+        "api_row_limit": ROW_LIMIT,
+        "api_cap_hit": initial_rows >= ROW_LIMIT,
+        "truncated_by_local_limit": truncated_by_local_limit,
+        "csv": str(csv_path),
+        "sql": str(sql_path),
+    }
+    if split_detail:
+        result["split"] = split_detail
+        result["split_strategy"] = "site_first"
+        result["max_split_rows"] = max((int(chunk.get("rows", 0)) for chunk in split_detail), default=0)
+    return result
 
 
 def query_raw_data_sdk(
     ggp: str,
     month: str,
     output_dir: Path,
-    limit: int = 2000,
+    limit: int = 0,
     months_back: int = 12,
     config_path: Optional[str] = None,
     app_key: Optional[str] = None,
@@ -505,7 +674,7 @@ def query_raw_data_sdk(
         print(f"  ✅ Resolved GGP: {ggp} → {resolved_ggp}")
     results = []
     for name, sql in build_queries(resolved_ggp, month, months_back=months_back).items():
-        results.append(run_sdk_query(client, query_configuration_cls, config, name, sql, output_dir, limit=limit))
+        results.append(run_sdk_query(client, query_configuration_cls, config, name, sql, output_dir, limit=limit, ggp=resolved_ggp))
     summary = {
         "backend": "sdk",
         "api_name": config.api_name,
@@ -612,8 +781,6 @@ def query_raw_data_bridge(
     months_back: int = 12,
 ) -> Dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    if not bridge:
-        raise RuntimeError("Bridge mode requires --bridge or AUTODECK_BRIDGE. SDK mode is the default supported path.")
     bridge_path = str(Path(bridge).expanduser().resolve())
     asset = create_or_find_asset(bridge_path, asset_id)
     results = []
@@ -631,7 +798,7 @@ def query_raw_data(
     backend: str = "sdk",
     bridge: str = DEFAULT_BRIDGE,
     asset_id: Optional[int] = None,
-    limit: int = 2000,
+    limit: int = 0,
     months_back: int = 12,
     dataservice_config: Optional[str] = None,
     dataservice_app_key: Optional[str] = None,
@@ -681,7 +848,7 @@ def main() -> int:
     parser.add_argument("--month", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--backend", choices=["sdk", "bridge"], default="sdk")
-    parser.add_argument("--limit", type=int, default=2000)
+    parser.add_argument("--limit", type=int, default=0, help="SDK row cap. Use 0 for no local truncation.")
     parser.add_argument("--months-back", type=int, default=12)
 
     parser.add_argument("--dataservice-config")
