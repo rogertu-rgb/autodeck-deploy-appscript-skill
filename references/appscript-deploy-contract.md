@@ -44,10 +44,20 @@ Shopee domain policy blocks `ANYONE`; use `DOMAIN`.
 
 1. Create or reuse Google Sheet.
 2. Render `Code.gs` with final `SHEET_ID`.
-3. Create Apps Script project.
+3. Create Apps Script project, unless an existing `script_id` is supplied for stable-link updates.
 4. Upload manifest, Code, and Index.
 5. Create version.
-6. Create deployment with `manifestFileName: "appsscript"`.
+6. Create deployment with `manifestFileName: "appsscript"`, unless an existing `deployment_id` is supplied; in that case update the deployment to the new version.
 7. Return the deployment URL.
 
-Each deployment returns a new URL.
+## Stable Link Updates
+
+If a user asks to update the current link, reuse the existing Apps Script project and deployment:
+
+```text
+projects.updateContent(scriptId)
+projects.versions.create(scriptId)
+projects.deployments.update(scriptId, deploymentId, deploymentConfig.versionNumber = new version)
+```
+
+The Web App URL is tied to `deploymentId`, so updating the same deployment keeps the same URL. Creating a fresh deployment returns a new URL.
