@@ -453,10 +453,9 @@ def build_l2_drill(
     df_a: pd.DataFrame, df_b: pd.DataFrame, l1_filter: str
 ) -> Dict[str, Any]:
     """
-    Section 1.4: L2 drill-down within a selected L1.
+    Section 1.4: L2 drill-down across the full site x L1 x L2 hierarchy.
     """
     df = df_a.copy()
-    df = df[df["l1"] == l1_filter]
     df["adg"] = df["adg"].apply(_safe_float)
 
     months = sorted(df["year_month"].unique())
@@ -464,28 +463,33 @@ def build_l2_drill(
         return {"section_id": "sec_l2_drill", "error": "Need at least 2 months"}
     current_m, prev_m = months[-1], months[-2]
 
-    mtd = df[df["year_month"] == current_m].groupby(["site", "l2"]).agg(adg_mtd=("adg", "sum")).reset_index()
-    m1 = df[df["year_month"] == prev_m].groupby(["site", "l2"]).agg(adg_m1=("adg", "sum")).reset_index()
-    result = mtd.merge(m1, on=["site", "l2"], how="outer").fillna(0)
+    hierarchy_cols = ["site", "l1", "l2"]
+    mtd = df[df["year_month"] == current_m].groupby(hierarchy_cols).agg(adg_mtd=("adg", "sum")).reset_index()
+    m1 = df[df["year_month"] == prev_m].groupby(hierarchy_cols).agg(adg_m1=("adg", "sum")).reset_index()
+    result = mtd.merge(m1, on=hierarchy_cols, how="outer").fillna(0)
     result["adg_mom"] = result.apply(lambda r: _mom_pct(r["adg_mtd"], r["adg_m1"]), axis=1)
 
     # Share within L1
-    l1_total = result.groupby("site")["adg_mtd"].transform("sum")
-    result["share_in_l1"] = (result["adg_mtd"] / l1_total * 100).round(1)
+    l1_total = result.groupby(["site", "l1"])["adg_mtd"].transform("sum")
+    result["share_in_l1"] = result.apply(
+        lambda r: round(r["adg_mtd"] / l1_total.loc[r.name] * 100, 1)
+        if l1_total.loc[r.name] else None,
+        axis=1,
+    )
 
     # Waterfall data: contribution of each L2 to L1 ADG change
     result["adg_delta"] = result["adg_mtd"] - result["adg_m1"]
-    waterfall = result.groupby("l2").agg(adg_delta=("adg_delta", "sum")).sort_values("adg_delta").reset_index()
+    waterfall = result.groupby(["l1", "l2"]).agg(adg_delta=("adg_delta", "sum")).sort_values("adg_delta").reset_index()
 
     # Benchmark
     if df_b is not None and len(df_b) > 0:
         b = df_b.copy()
         if "seller_type" in b.columns:
             b = b[b["seller_type"] == "CNCB"]
-        bench = b[b["l1"] == l1_filter].groupby(["site", "l2"]).agg(
+        bench = b.groupby(hierarchy_cols).agg(
             mkt_adg_mom=("mkt_adg_mom", "mean")
         ).reset_index()
-        result = result.merge(bench, on=["site", "l2"], how="left")
+        result = result.merge(bench, on=hierarchy_cols, how="left")
     else:
         result["mkt_adg_mom"] = None
 
@@ -493,7 +497,7 @@ def build_l2_drill(
         lambda r: _gap_pp(r["adg_mom"], _safe_float(r.get("mkt_adg_mom")) if pd.notna(r.get("mkt_adg_mom")) else None), axis=1
     )
 
-    out_cols = ["site", "l2", "adg_mtd", "adg_m1", "adg_mom", "mkt_adg_mom",
+    out_cols = ["site", "l1", "l2", "adg_mtd", "adg_m1", "adg_mom", "mkt_adg_mom",
                  "gap_pp", "share_in_l1", "adg_delta"]
     rows = _df_to_rows(result, out_cols)
 
@@ -504,7 +508,7 @@ def build_l2_drill(
         "meta": {
             "l1_filter": l1_filter,
             "waterfall": [
-                {"l2": r["l2"], "delta": round(r["adg_delta"], 0)}
+                {"l1": r["l1"], "l2": r["l2"], "delta": round(r["adg_delta"], 0)}
                 for _, r in waterfall.iterrows()
             ],
         },
@@ -522,7 +526,6 @@ def build_l3_granular(
     Section 1.5: L3 granular analysis + growth distribution + top items.
     """
     df = df_a.copy()
-    df = df[(df["l1"] == l1) & (df["l2"] == l2)]
     df["adg"] = df["adg"].apply(_safe_float)
 
     months = sorted(df["year_month"].unique())
@@ -530,12 +533,13 @@ def build_l3_granular(
         return {"section_id": "sec_l3_granular", "error": "Need at least 2 months"}
     current_m, prev_m = months[-1], months[-2]
 
-    mtd = df[df["year_month"] == current_m].groupby(["site", "l3"]).agg(adg_mtd=("adg", "sum")).reset_index()
-    m1 = df[df["year_month"] == prev_m].groupby(["site", "l3"]).agg(adg_m1=("adg", "sum")).reset_index()
-    result = mtd.merge(m1, on=["site", "l3"], how="outer").fillna(0)
+    hierarchy_cols = ["site", "l1", "l2", "l3"]
+    mtd = df[df["year_month"] == current_m].groupby(hierarchy_cols).agg(adg_mtd=("adg", "sum")).reset_index()
+    m1 = df[df["year_month"] == prev_m].groupby(hierarchy_cols).agg(adg_m1=("adg", "sum")).reset_index()
+    result = mtd.merge(m1, on=hierarchy_cols, how="outer").fillna(0)
     result["adg_mom"] = result.apply(lambda r: _mom_pct(r["adg_mtd"], r["adg_m1"]), axis=1)
 
-    l2_total = result.groupby("site")["adg_mtd"].transform("sum")
+    l2_total = result.groupby(["site", "l1", "l2"])["adg_mtd"].transform("sum")
     result["share_in_l2"] = (result["adg_mtd"] / l2_total * 100).round(1)
 
     # Growth distribution from Table B v2 (p10/p25/p50 are already %)
@@ -544,10 +548,9 @@ def build_l3_granular(
         b = df_b.copy()
         available_growth_cols = [c for c in growth_cols if c in b.columns]
         if available_growth_cols and "l1" in b.columns and "l2" in b.columns:
-            b = b[(b["l1"] == l1) & (b["l2"] == l2)] if len(b) > 0 else b
             agg_dict = {c: (c, "first") for c in available_growth_cols}
-            bench = b.groupby(["site", "l3"]).agg(**agg_dict).reset_index()
-            result = result.merge(bench, on=["site", "l3"], how="left")
+            bench = b.groupby(hierarchy_cols).agg(**agg_dict).reset_index()
+            result = result.merge(bench, on=hierarchy_cols, how="left")
     for c in growth_cols:
         if c not in result.columns:
             result[c] = None
@@ -583,7 +586,7 @@ def build_l3_granular(
                 "delta": round(row["adg_delta"], 0),
             })
 
-    out_cols = ["site", "l3", "adg_mtd", "adg_m1", "adg_mom", "share_in_l2",
+    out_cols = ["site", "l1", "l2", "l3", "adg_mtd", "adg_m1", "adg_mom", "share_in_l2",
                  "p10_growth", "p25_growth", "p50_growth", "seller_cnt"]
     rows = _df_to_rows(result, out_cols)
 
