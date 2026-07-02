@@ -1,8 +1,10 @@
 # auto_html_0602 Golden Contract
 
-The report target is not just a visual theme. It is the full AutoDeck HTML product shell plus the interaction model from the project golden report artifact.
+The report target is not just a visual theme. It is the full AutoDeck HTML product shell plus the interaction model from:
 
-When a local golden report is available, pass its `sheet_payload.json` to the harness and compare behavior before editing the Apps Script HTML skill.
+a user-provided golden report artifact such as `outputs/autodeck_runs/<seller_month>/sections_review.html`
+
+Use that file, its payload, and its generated JS structure as the quality bar when editing the Apps Script HTML skill.
 
 ## Required Composition
 
@@ -45,7 +47,7 @@ Use this payload for quick regression:
 
 ```bash
 python3 scripts/render_html.py \
-  --input-json path/to/golden/sheet_payload.json \
+  --input-json outputs/autodeck_runs/<seller_month>/sheet_payload.json \
   --ggp "深圳市迈四方科技有限公司 - GGP" \
   --month 2026-06 \
   --output /tmp/autodeck_index.html \
