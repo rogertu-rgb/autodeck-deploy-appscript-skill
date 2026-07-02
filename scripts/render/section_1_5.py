@@ -2,12 +2,11 @@
 """
 Section 1.5 — L3 Granular Diagnosis (三级品类粒度诊断)
 
-Same pattern as L1/L2:
-  - Multi-select site filter
-  - Heatmap: site × L3, color = MoM%
-  - Growth positioning card (p10/p25/p50 benchmarks)
-  - Top 5 Rising (Site × L3) table
-  - Top 5 Falling (Site × L3) table
+Primary visual:
+  - Evidence/proof table for the L2 drilldown route
+  - Share bars, seller MoM, optional P50 benchmark, gap, and action tag
+  - If P50 is missing, label the row as seller-side evidence instead of
+    overclaiming a market gap
 """
 
 from __future__ import annotations
@@ -18,170 +17,130 @@ def l3_granular_chart_js() -> str:
 function l3GranularChart(model) {
   if (!model || !model.body.length) return emptyStateChart(model);
 
-  var allSites = {}, l3Set = {};
-  model.body.forEach(function(item) {
-    var s = String(val(item, "site") || "").trim();
-    var l = String(val(item, "l3") || "").trim();
-    if (s) allSites[s] = true;
-    if (l) l3Set[l] = true;
-  });
-  var siteList = Object.keys(allSites).sort();
-  var l3List = Object.keys(l3Set).sort();
+  function pct(n) {
+    if (n == null || !isFinite(n)) return "—";
+    return (n > 0 ? "+" : "") + formatCompact(n) + "%";
+  }
+  function pp(n) {
+    if (n == null || !isFinite(n)) return "—";
+    return (n > 0 ? "+" : "") + formatCompact(n) + "pp";
+  }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function label(s, maxLen) {
+    s = String(s == null ? "" : s);
+    return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
+  }
+  function actionTag(r) {
+    if ((r.share || 0) >= 20 && r.mom != null && r.mom < -10) return "进listing验证";
+    if (r.gap != null && r.gap < -10 && (r.share || 0) >= 10) return "对标差距复盘";
+    if (r.mom != null && r.mom > 10) return "正向复制";
+    if ((r.adg || 0) < 1) return "长尾观察";
+    return "继续观察";
+  }
+  function hasSellerData(adg, prev, share, mom) {
+    return (adg != null && adg > 0) ||
+           (prev != null && prev > 0) ||
+           (share != null && share > 0) ||
+           (mom != null && isFinite(mom));
+  }
+  function categoryPathL3(r) {
+    return [r.l1, r.l2, r.l3].filter(function(x) { return x != null && String(x).trim() !== ""; }).join(" > ") || r.l3 || "—";
+  }
 
-  // Pattern detection
-  var totalPairs = model.body.length;
-  var anomalyPairs = 0;
+  var entries = [];
+  var p50Rows = 0;
+  var md = typeof metaDict === "function" ? metaDict("sec_l3_granular") : {};
   model.body.forEach(function(item) {
+    var site = String(val(item, "site") || "").trim();
+    var l1 = String(val(item, "l1") || md.l1 || "").trim();
+    var l2 = String(val(item, "l2") || md.l2 || "").trim();
+    var l3 = String(val(item, "l3") || "").trim();
+    if (!site || !l3) return;
+    var adgRaw = num(item, "adg_mtd");
+    var prevRaw = num(item, "adg_m1");
     var mom = num(item, "adg_mom");
-    if (mom != null && Math.abs(mom) > 10) anomalyPairs++;
+    var shareRaw = num(item, "share_in_l2");
+    if (!hasSellerData(adgRaw, prevRaw, shareRaw, mom)) return;
+    var adg = adgRaw || 0;
+    var prev = prevRaw || 0;
+    var share = shareRaw || 0;
+    var p50 = num(item, "p50_growth");
+    var sellers = num(item, "seller_cnt");
+    var gap = (mom != null && p50 != null) ? mom - p50 : null;
+    if (p50 != null) p50Rows++;
+    entries.push({ item: item, site: site, l1: l1, l2: l2, l3: l3, adg: adg, prev: prev, mom: mom, share: share, p50: p50, gap: gap, sellers: sellers });
   });
 
-  // Heatmap
-  var heatData = [];
-  var maxAbsMom = 5;
-  model.body.forEach(function(item) {
-    var s = String(val(item, "site") || "").trim();
-    var l = String(val(item, "l3") || "").trim();
-    var mom = num(item, "adg_mom");
-    if (!s || !l) return;
-    if (mom != null) maxAbsMom = Math.max(maxAbsMom, Math.abs(mom));
-    heatData.push([l3List.indexOf(l), siteList.indexOf(s), mom != null ? parseFloat(mom.toFixed(1)) : 0]);
+  if (!entries.length) return emptyStateChart(model);
+
+  entries.forEach(function(r) {
+    var gapSignal = r.gap != null ? Math.abs(r.gap) : Math.abs(r.mom || 0);
+    r.score = gapSignal * Math.max(r.share || 0, 0.5) + Math.log((r.adg || 0) + 1) * 2;
+    r.action = actionTag(r);
   });
+  entries.sort(function(a, b) { return b.score - a.score; });
+  var rows = entries.slice(0, 12);
+  var maxShare = rows.reduce(function(m, r) { return Math.max(m, r.share || 0); }, 1);
+  var maxAdg = rows.reduce(function(m, r) { return Math.max(m, r.adg || 0); }, 1);
 
-  // Site filter
-  var filterId = "l3-site-filter-" + Math.random().toString(36).slice(2, 6);
-  var html = '<div id="' + filterId + '" class="site-filter-bar" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;align-items:center">';
-  html += '<span style="font-size:11px;color:var(--muted);font-weight:650;margin-right:4px">Site:</span>';
-  html += '<button class="site-pill active" data-site="__ALL__" style="border:1px solid var(--line);border-radius:14px;padding:3px 10px;font-size:11px;cursor:pointer;background:var(--ink);color:#fff;border-color:var(--ink)">All (' + siteList.length + ')</button>';
-  siteList.forEach(function(s) {
-    html += '<button class="site-pill active" data-site="' + esc(s) + '" style="border:1px solid var(--line);border-radius:14px;padding:3px 10px;font-size:11px;cursor:pointer;background:var(--accent-soft);color:var(--accent-dark);border-color:var(--accent)">' + esc(s) + '</button>';
+  var topDecline = entries.filter(function(r) { return r.mom != null && r.mom < 0; }).sort(function(a, b) { return a.mom - b.mom; })[0];
+  var topGrowth = entries.filter(function(r) { return r.mom != null && r.mom > 0; }).sort(function(a, b) { return b.mom - a.mom; })[0];
+  var topScale = entries.slice().sort(function(a, b) { return b.adg - a.adg; })[0];
+
+  var style = [
+    '<style>',
+    '.cat-proof-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:8px 0 10px}',
+    '.cat-proof-card{border:1px solid var(--line);background:#fff;padding:10px;min-width:0}',
+    '.cat-proof-card b{display:block;font-size:13px;margin-bottom:4px}.cat-proof-card small{color:var(--muted);line-height:1.35}',
+    '.cat-l3-proof{width:100%;border-collapse:collapse;margin:8px 0 12px}',
+    '.cat-l3-proof th{background:#3f4146;color:#fff;border:1px solid #fff;padding:7px;font-size:11px;white-space:nowrap}',
+    '.cat-l3-proof td{padding:7px;border-bottom:1px solid #eceff3;text-align:center;font-size:12px}',
+    '.cat-l3-proof td:first-child{width:38px;min-width:38px;text-align:center}',
+    '.cat-l3-proof td:nth-child(3){text-align:left;font-weight:700;max-width:260px;line-height:1.25;word-break:break-word}',
+    '.l3-rank-dot{display:inline-block!important;position:static!important;transform:none!important;float:none!important;width:22px!important;height:22px!important;min-width:22px!important;border-radius:999px!important;background:#ee4d2d!important;color:#fff!important;text-align:center!important;font-weight:900!important;font-size:12px!important;line-height:22px!important;vertical-align:middle!important}',
+    '.cat-table-bar{width:82px;height:8px;display:inline-block;background:#f3f4f6;border:1px solid #d9dee6;vertical-align:middle;margin-right:6px;overflow:hidden}',
+    '.cat-table-bar i{display:block;height:100%;background:var(--accent);opacity:.78}',
+    '.cat-risk{color:var(--down);font-weight:800}.cat-up{color:var(--up);font-weight:800}.cat-muted{color:var(--muted)}',
+    '.cat-action-tag{display:inline-block;background:#f1f3f5;border:1px solid #d9dee6;padding:3px 6px;font-weight:700;white-space:nowrap}',
+    '.cat-caption{font-size:11px;color:var(--muted);line-height:1.45;margin:0 0 8px}',
+    '@media(max-width:900px){.cat-proof-summary{grid-template-columns:1fr}.cat-l3-proof{min-width:780px}.cat-proof-wrap{overflow:auto}}',
+    '</style>'
+  ].join('');
+
+  function summaryCard(title, r, metricText) {
+    if (!r) return '<div class="cat-proof-card"><b>' + esc(title) + '</b><small>暂无可用行</small></div>';
+    return '<div class="cat-proof-card"><b>' + esc(title) + '</b><small>' + esc(r.site) + ' · ' + esc(label(categoryPathL3(r), 64)) + '<br>' + metricText(r) + '</small></div>';
+  }
+
+  var html = style;
+  html += '<div class="cat-caption">L3 用来验证 L2 归因：优先看占L2比重、卖家MoM、P50对标是否可用，以及下一步应该进入 listing/shop/流量/履约哪条证据链。</div>';
+  html += '<div class="cat-proof-summary">';
+  html += summaryCard("最大体量", topScale, function(r) { return formatCompact(r.adg || 0) + " ADG · 占L2 " + formatCompact(r.share || 0) + "%"; });
+  html += summaryCard("增长最好", topGrowth, function(r) { return "卖家MoM " + pct(r.mom) + " · P50 " + pct(r.p50); });
+  html += summaryCard("跌幅最大", topDecline, function(r) { return "卖家MoM " + pct(r.mom) + " · 占L2 " + formatCompact(r.share || 0) + "%"; });
+  html += '</div>';
+
+  html += '<div class="cat-proof-wrap"><table class="cat-l3-proof"><thead><tr>';
+  html += '<th>#</th><th>Site</th><th>类目路径</th><th>占L2</th><th>ADG</th><th>卖家MoM</th><th>P50</th><th>卖家-P50</th><th>Action</th>';
+  html += '</tr></thead><tbody>';
+  rows.forEach(function(r, idx) {
+    var momTone = r.mom != null && r.mom >= 0 ? "cat-up" : "cat-risk";
+    var gapTone = r.gap != null && r.gap >= 0 ? "cat-up" : "cat-risk";
+    var call = idx < 3 ? '<span class="l3-rank-dot" data-l3-callout-rank="' + (idx + 1) + '">' + (idx + 1) + '</span>' : String(idx + 1);
+    html += '<tr>';
+    html += '<td>' + call + '</td>';
+    html += '<td>' + esc(r.site) + '</td>';
+    html += '<td title="' + esc(categoryPathL3(r)) + '">' + esc(label(categoryPathL3(r), 68)) + '</td>';
+    html += '<td><span class="cat-table-bar"><i style="width:' + clamp((r.share || 0) / maxShare * 100, 0, 100).toFixed(1) + '%"></i></span>' + formatCompact(r.share || 0) + '%</td>';
+    html += '<td><span class="cat-table-bar"><i style="width:' + clamp((r.adg || 0) / maxAdg * 100, 0, 100).toFixed(1) + '%"></i></span>' + formatCompact(r.adg || 0) + '</td>';
+    html += '<td class="' + momTone + '">' + pct(r.mom) + '</td>';
+    html += '<td>' + (r.p50 != null ? pct(r.p50) : '<span class="cat-muted">缺P50</span>') + '</td>';
+    html += '<td class="' + (r.gap != null ? gapTone : 'cat-muted') + '">' + (r.gap != null ? pp(r.gap) : 'seller-side') + '</td>';
+    html += '<td><span class="cat-action-tag">' + esc(r.action) + '</span></td>';
+    html += '</tr>';
   });
-  html += '</div>';
-
-  // Heatmap
-  var heatmapId = "l3-heat-" + Math.random().toString(36).slice(2, 6);
-  html += '<div id="' + heatmapId + '" style="width:100%;height:' + Math.max(180, siteList.length * 28 + 50) + 'px;margin:6px 0" role="img" aria-label="Site×L3 MoM% heatmap"></div>';
-  setTimeout(function() {
-    var dom = document.getElementById(heatmapId);
-    if (!dom) return;
-    function tryInit() {
-      if (dom.clientWidth === 0) { setTimeout(tryInit, 150); return; }
-      var existing = echarts.getInstanceByDom(dom);
-      if (existing) existing.dispose();
-      var chart = echarts.init(dom);
-      chart.setOption({
-        tooltip: { backgroundColor: "rgba(32,33,36,.94)", borderColor: "transparent", textStyle: { color: "#fff", fontSize: 12 },
-          formatter: function(p) { return "<strong>" + siteList[p.value[1]] + " × " + l3List[p.value[0]] + "</strong><br>MoM: " + formatCompact(p.value[2]) + "%"; } },
-        grid: { left: 60, right: 30, top: 5, bottom: 60 },
-        xAxis: { type: "category", data: l3List, position: "bottom", axisLabel: { fontSize: 9, rotate: 25 } },
-        yAxis: { type: "category", data: siteList, axisLabel: { fontSize: 11, fontWeight: 700 } },
-        visualMap: { min: -maxAbsMom, max: maxAbsMom, calculable: true, orient: "horizontal", left: "center", bottom: 0,
-          inRange: { color: ["#137a4b", "#ffffff", "#ee4d2d"] }, text: ["+MoM%", "−MoM%"], textStyle: { fontSize: 9 } },
-        series: [{ type: "heatmap", data: heatData, label: { show: true, fontSize: 9,
-          formatter: function(p) { var v = p.value[2]; return v === 0 ? "" : formatCompact(v) + "%"; }
-        }, emphasis: { itemStyle: { shadowBlur: 8 } } }]
-      });
-      var ro = new ResizeObserver(function() { chart.resize(); });
-      ro.observe(dom); dom._resizeObserver = ro;
-    }
-    tryInit();
-  }, 180);
-
-  // Growth positioning card
-  var totalSellerCnt = 0;
-  model.body.forEach(function(item) { totalSellerCnt += num(item, "seller_cnt") || 0; });
-  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">';
-  html += '<div class="metric-card" style="flex:1 1 140px;min-width:120px"><div class="label">Site × L3 Pairs</div><div class="value" style="font-size:16px">' + totalPairs + '</div><div class="context">' + siteList.length + ' sites × ' + l3List.length + ' L3s</div></div>';
-  html += '<div class="metric-card" style="flex:1 1 140px;min-width:120px"><div class="label">Volatile L3s (|MoM|>10%)</div><div class="value" style="font-size:16px">' + anomalyPairs + '</div><div class="context">of ' + totalPairs + ' pairs</div></div>';
-  html += '<div class="metric-card" style="flex:1 1 140px;min-width:120px"><div class="label">Total Sellers</div><div class="value" style="font-size:16px">' + formatCompact(totalSellerCnt) + '</div><div class="context">Across all L3s</div></div>';
-  html += '</div>';
-
-  // Tables
-  var buildTables = function(activeSites) {
-    var filtered = model.body.filter(function(item) {
-      var s = String(val(item, "site") || "").trim();
-      return activeSites.__ALL__ || activeSites[s];
-    });
-    var entries = [];
-    filtered.forEach(function(item) {
-      var site = String(val(item, "site") || "").trim();
-      var l3 = String(val(item, "l3") || "").trim();
-      var adg = num(item, "adg_mtd") || 0;
-      var mom = num(item, "adg_mom");
-      var share = num(item, "share_in_l2") || 0;
-      var p50 = num(item, "p50_growth");
-      var cnt = num(item, "seller_cnt") || 0;
-      if (!site || !l3) return;
-      entries.push({ site: site, l3: l3, adg_mtd: adg, adg_mom: mom, share_pct: share, p50: p50, seller_cnt: cnt });
-    });
-    var gainers = entries.filter(function(e) { return e.adg_mom != null && e.adg_mom > 0; });
-    var losers = entries.filter(function(e) { return e.adg_mom != null && e.adg_mom < 0; });
-    gainers.sort(function(a, b) { return b.adg_mom - a.adg_mom; });
-    losers.sort(function(a, b) { return a.adg_mom - b.adg_mom; });
-
-    var renderTable = function(title, rows, tone) {
-      var t = '<div style="margin-bottom:12px">';
-      t += '<div style="font-size:12px;font-weight:700;padding:6px 0;color:var(--' + (tone === 'up' ? 'up' : 'down') + ')">' + title + '</div>';
-      if (!rows.length) { t += '<div class="muted" style="padding:8px;font-size:11px">No entries</div>'; return t + '</div>'; }
-      t += '<table class="report-table"><thead><tr>';
-      t += '<th>Site</th><th>L3</th><th>ADG MTD</th><th>MoM%</th><th>P50 Growth</th><th>Share%</th><th>Sellers</th>';
-      t += '</tr></thead><tbody>';
-      rows.slice(0, 5).forEach(function(r) {
-        var momTone = r.adg_mom > 0 ? 'up-text' : 'dn-text';
-        var vsP50 = r.adg_mom != null && r.p50 != null ? (r.adg_mom > r.p50 ? '↑ above' : '↓ below') : '';
-        t += '<tr>';
-        t += '<td>' + esc(r.site) + '</td><td><strong>' + esc(r.l3) + '</strong></td>';
-        t += '<td>' + formatCompact(r.adg_mtd) + '</td>';
-        t += '<td class="' + momTone + '">' + (r.adg_mom != null ? formatCompact(r.adg_mom) + '%' : '—') + '</td>';
-        t += '<td>' + (r.p50 != null ? formatCompact(r.p50) + '% ' + vsP50 : '—') + '</td>';
-        t += '<td>' + (r.share_pct > 0 ? formatCompact(r.share_pct) + '%' : '—') + '</td>';
-        t += '<td>' + r.seller_cnt + '</td>';
-        t += '</tr>';
-      });
-      t += '</tbody></table></div>';
-      return t;
-    };
-    return renderTable('⬆ Top 5 Rising (Site × L3)', gainers, 'up') +
-           renderTable('⬇ Top 5 Falling (Site × L3)', losers, 'down');
-  };
-
-  var tableContainerId = "l3-tables-" + Math.random().toString(36).slice(2, 6);
-  html += '<div id="' + tableContainerId + '">';
-  html += buildTables({ __ALL__: true });
-  html += '</div>';
-
-  // Filter interactions
-  setTimeout(function() {
-    var filterBar = document.getElementById(filterId);
-    if (!filterBar) return;
-    filterBar.addEventListener("click", function(e) {
-      var pill = e.target.closest(".site-pill");
-      if (!pill) return;
-      var site = pill.getAttribute("data-site");
-      if (site === "__ALL__") {
-        var allActive = pill.classList.contains("active");
-        filterBar.querySelectorAll(".site-pill").forEach(function(p) {
-          if (allActive) { p.classList.remove("active"); p.style.background="#fff"; p.style.color="var(--ink)"; p.style.borderColor="var(--line)"; }
-          else { p.classList.add("active"); if (p.getAttribute("data-site") === "__ALL__") { p.style.background="var(--ink)"; p.style.color="#fff"; p.style.borderColor="var(--ink)"; } else { p.style.background="var(--accent-soft)"; p.style.color="var(--accent-dark)"; p.style.borderColor="var(--accent)"; } }
-        });
-      } else {
-        var wasActive = pill.classList.contains("active");
-        if (wasActive) { pill.classList.remove("active"); pill.style.background="#fff"; pill.style.color="var(--ink)"; pill.style.borderColor="var(--line)"; }
-        else { pill.classList.add("active"); pill.style.background="var(--accent-soft)"; pill.style.color="var(--accent-dark)"; pill.style.borderColor="var(--accent)"; }
-        var allBtn = filterBar.querySelector('[data-site="__ALL__"]');
-        var anyInactive = filterBar.querySelectorAll('.site-pill[data-site]:not([data-site="__ALL__"]):not(.active)');
-        if (anyInactive.length > 0 && allBtn) { allBtn.classList.remove("active"); allBtn.style.background="#fff"; allBtn.style.color="var(--ink)"; allBtn.style.borderColor="var(--line)"; }
-        else if (allBtn && anyInactive.length === 0) { allBtn.classList.add("active"); allBtn.style.background="var(--ink)"; allBtn.style.color="#fff"; allBtn.style.borderColor="var(--ink)"; }
-      }
-      var activePills = filterBar.querySelectorAll('.site-pill.active[data-site]:not([data-site="__ALL__"])');
-      var activeSites = {};
-      activePills.forEach(function(p) { activeSites[p.getAttribute("data-site")] = true; });
-      if (activePills.length === siteList.length) activeSites = { __ALL__: true };
-      if (activePills.length === 0) { document.getElementById(tableContainerId).innerHTML = '<div class="muted" style="padding:16px">Select at least one site.</div>'; return; }
-      document.getElementById(tableContainerId).innerHTML = buildTables(activeSites);
-    });
-  }, 100);
-
+  html += '</tbody></table></div>';
+  html += '<div class="cat-caption">' + (p50Rows ? ('P50覆盖 ' + p50Rows + '/' + entries.length + ' 行；有P50时用卖家-P50判断相对表现。') : '当前L3缺少P50覆盖，因此本表只作为卖家侧证据，不直接声称大盘跑赢/跑输。') + '</div>';
   return html;
 }
 """
