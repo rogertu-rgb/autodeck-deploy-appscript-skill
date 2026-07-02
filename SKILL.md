@@ -1,12 +1,12 @@
 ---
 name: autodeck-deploy-appscript
 description: Generate and publish a complete AutoDeck seller visit diagnosis HTML report to Google Apps Script from a local OAuth credential and a GGP account name. Use when a user asks to run AutoDeck end-to-end, create a seller monthly diagnosis HTML, publish a seller visit report, deploy AutoDeck to App Script, or generate an AutoDeck report from v_0602/Future Architecture materials. The workflow validates OAuth, pulls or reuses raw AutoDeck data, creates or reuses a Google Sheet, runs the existing build_sections.py section builder, renders a Sheet-backed HTML report, runs guardrail checks, and deploys Code.gs/Index.html/appsscript.json through the Apps Script API.
-version: 0.2.17
+version: 0.2.18
 ---
 
 # AutoDeck Deploy AppScript
 
-Skill revision: 0.2.18
+Skill revision: 0.2.19
 
 ## Overview
 
@@ -52,6 +52,14 @@ scripts/render/
 **Bundled build logic:** `scripts/section_builder/build_sections.py`
 
 ## Quick Start
+
+Install or update this skill from GitHub:
+
+```bash
+SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/autodeck-deploy-appscript"; mkdir -p "$(dirname "$SKILL_DIR")" && { [ -d "$SKILL_DIR/.git" ] && git -C "$SKILL_DIR" pull --ff-only || git clone https://github.com/rogertu-rgb/autodeck-deploy-appscript-skill.git "$SKILL_DIR"; }
+```
+
+After installing, reload the Codex thread so the new skill metadata is discovered.
 
 Use the orchestrator:
 
