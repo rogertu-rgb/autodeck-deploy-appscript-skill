@@ -13,18 +13,18 @@ from typing import Dict, List, Optional
 
 SECTION_ORDER_ZH: List[List[str]] = [
     ["sec_12m_history", "12个月业绩概览"],
-    ["sec_site_benchmark", "各站点增速vs大盘对标"],
+    ["sec_site_benchmark", "各站点增速对标大盘"],
     ["sec_l1_overview", "一级品类总览"],
     ["sec_l2_drill", "二级品类钻取"],
     ["sec_l3_granular", "三级品类粒度诊断"],
-    ["sec_volatility", "波动率信号扫描"],
-    ["sec_shop_impact", "店铺贡献分解"],
+    ["sec_volatility", "类目站点异常信号扫描"],
+    ["sec_shop_impact", "店铺贡献分析"],
     ["sec_listing_change", "Top商品贡献榜"],
     ["sec_fulfillment", "履约结构分析"],
     ["sec_traffic_channel", "订单来源拆分"],
-    ["sec_subsidy", "促销补贴结构"],
+    ["sec_subsidy", "促销补贴有效性"],
     ["sec_price_band", "价格带竞争定位"],
-    ["sec_ams", "AMS广告效率审计"],
+    ["sec_ams", "ADS出单效率审计"],
     ["sec_root_cause", "站点根因诊断"],
 ]
 
@@ -34,14 +34,14 @@ SECTION_ORDER_EN: List[List[str]] = [
     ["sec_l1_overview", "L1 Category Overview"],
     ["sec_l2_drill", "L2 Category Drilldown"],
     ["sec_l3_granular", "L3 Granular Diagnosis"],
-    ["sec_volatility", "Volatility Signal Scan"],
-    ["sec_shop_impact", "Shop Impact Decomposition"],
+    ["sec_volatility", "Category-Site Anomaly Signal Scan"],
+    ["sec_shop_impact", "Shop Contribution Analysis"],
     ["sec_listing_change", "Top Listing Contributions"],
     ["sec_fulfillment", "Fulfillment Structure"],
     ["sec_traffic_channel", "Order Source Split"],
-    ["sec_subsidy", "Subsidy and Promotion Structure"],
+    ["sec_subsidy", "Promotion Effectiveness"],
     ["sec_price_band", "Price Band Positioning"],
-    ["sec_ams", "AMS Advertising Efficiency"],
+    ["sec_ams", "ADS Order Efficiency Audit"],
     ["sec_root_cause", "Site-by-Site Root Cause Diagnosis"],
 ]
 
@@ -184,6 +184,9 @@ a:hover { text-decoration: underline; }
 .sec-body { padding: 0 16px 16px; }
 .analysis { background: var(--surface-soft); border-left: 3px solid var(--accent); border-radius: 4px; padding: 12px 14px; margin: 10px 0; font-size: 13px; }
 .analysis-label { color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; margin-bottom: 4px; }
+.analysis-callout-line { list-style: none; margin-left: -18px; display: flex; align-items: flex-start; gap: 8px; }
+.analysis-callout-marker { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 900; font-size: 11px; line-height: 1; flex: 0 0 20px; margin-top: 2px; }
+.analysis-callout-text { flex: 1; min-width: 0; }
 
 /* ── Evidence ── */
 .evidence-strip { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
