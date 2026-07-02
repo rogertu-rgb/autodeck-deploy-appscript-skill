@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Section 1.1 — Site Momentum vs Market Benchmark (各站点增速vs大盘对标)
+Section 1.1 — Site Attribution vs Market Benchmark (当前月站点归因)
 
-NO absolute values. MoM% comparison only.
-Chart: Grouped bar — seller MoM% vs market MoM% per site.
-Table: site | seller_adg_mom | mom_mkt_adg_pct | gap_pp | adg_share
-       (+ seller_ado_mom | mom_mkt_ado_pct | ado_gap_pp when available)
-Benchmark breakdown: mom_mkt_mall_adg_pct, mom_mkt_cb_adg_pct, mom_mkt_local_adg_pct (if in data)
+NO benchmark absolute values. MoM% comparison only.
 
-Data source: sec_site_benchmark (from autodeck__site_bu_benchmark_mi — MoM% only)
+Visual:
+  - Current-month priority dumbbell sorted by |ADG gap pp| × ADG share.
+  - Equal-size Market/Seller dots to avoid misleading scale.
+  - Thin gap bridge, colored by out/under-performance.
+  - Numbered callouts link top evidence rows to computed-analysis bullets.
+
+Data source: sec_site_benchmark. raw_benchmark_site must use Total-dimension
+site benchmark rows from autodeck__site_bu_benchmark_rpt.
 """
 
 from __future__ import annotations
@@ -27,170 +30,211 @@ function siteBenchmarkChart(model) {
     return null;
   }
 
-  // ── 1. Extract MoM% data (NO absolute values) ──
-  var sites = [];
-  var sellerAdgMom = [], mktAdgMom = [], gapPp = [], sharePct = [];
-  var sellerAdoMom = [], mktAdoMom = [], adoGapPp = [];
-  var hasAdo = false;
+  function signedPpLocal(v) {
+    if (v == null) return "—";
+    return (v > 0 ? "+" : "") + formatCompact(v) + "pp";
+  }
 
+  function signedPctLocal(v) {
+    if (v == null) return "—";
+    return (v > 0 ? "+" : "") + formatCompact(v) + "%";
+  }
+
+  function perfTag(gap) {
+    if (gap == null) return "不可对标";
+    if (gap >= 5) return "跑赢大盘";
+    if (gap <= -5) return "跑输大盘";
+    return "接近大盘";
+  }
+
+  function perfColor(gap) {
+    if (gap == null) return "#9ca3af";
+    if (gap >= 5) return "#1f8f58";
+    if (gap <= -5) return "#d83a2e";
+    return "#737373";
+  }
+
+  function svgText(s) {
+    return esc(String(s == null ? "" : s));
+  }
+
+  // ── 1. Extract current-month attribution rows ──
+  var rows = [];
   model.body.forEach(function(item) {
     var site = String(val(item, "site") || "").trim();
     if (!site) return;
-    sites.push(site);
-    sellerAdgMom.push(num(item, "seller_adg_mom"));
-    mktAdgMom.push(firstNum(item, ["mom_mkt_adg_pct", "mkt_adg_mom"]));
-    gapPp.push(num(item, "adg_gap_pp"));
-    sharePct.push(num(item, "adg_share"));
-    // ADO MoM if available
-    var sAdo = num(item, "seller_ado_mom");
-    var mAdo = firstNum(item, ["mom_mkt_ado_pct", "mkt_ado_mom"]);
-    var aGap = num(item, "ado_gap_pp");
-    sellerAdoMom.push(sAdo);
-    mktAdoMom.push(mAdo);
-    adoGapPp.push(aGap);
-    if (sAdo != null || mAdo != null) hasAdo = true;
-  });
-
-  if (!sites.length) return emptyStateChart(model);
-
-  // ── 2. Grouped bar chart: Seller MoM% vs Market MoM% ──
-  var chartId = "bm-chart-" + Math.random().toString(36).slice(2, 8);
-
-  var option = {
-    tooltip: {
-      trigger: "axis",
-      axisPointer: { type: "shadow" },
-      backgroundColor: "rgba(32,33,36,.94)",
-      borderColor: "transparent",
-      textStyle: { color: "#fff", fontSize: 12 },
-      formatter: function(params) {
-        var site = params[0].axisValue;
-        var lines = ["<strong>" + site + "</strong>"];
-        params.forEach(function(p) {
-          if (p.value != null) lines.push(p.marker + p.seriesName + ": " + formatCompact(p.value) + "%");
-        });
-        return lines.join("<br>");
-      }
-    },
-    legend: {
-      data: ["Seller ADG MoM%", "Market ADG MoM%"],
-      top: 0, left: "center",
-      textStyle: { fontSize: 11 },
-      itemWidth: 12, itemHeight: 12, itemGap: 14,
-      padding: [0, 0, 8, 0]
-    },
-    grid: { left: 12, right: 12, top: 40, bottom: 8 },
-    xAxis: {
-      type: "category", data: sites,
-      axisLabel: { fontSize: 12, fontWeight: 700 }
-    },
-    yAxis: {
-      type: "value",
-      axisLabel: { fontSize: 10, formatter: function(v) { return formatCompact(v) + "%"; } },
-      splitLine: { lineStyle: { color: "#edf0f3", type: "dashed" } }
-    },
-    series: [
-      {
-        name: "Seller ADG MoM%", type: "bar",
-        data: sellerAdgMom,
-        itemStyle: { color: function(params) { return siteColor(sites[params.dataIndex]); } },
-        barMaxWidth: 40,
-        label: { show: true, position: "top", fontSize: 9,
-          formatter: function(p) { return p.value != null ? formatCompact(p.value) + "%" : ""; }
-        }
-      },
-      {
-        name: "Market ADG MoM%", type: "bar",
-        data: mktAdgMom,
-        itemStyle: { color: "#d5d9e0" },
-        barMaxWidth: 40,
-        label: { show: true, position: "top", fontSize: 9,
-          formatter: function(p) { return p.value != null ? formatCompact(p.value) + "%" : ""; }
-        }
-      }
-    ]
-  };
-
-  var html = '<div id="' + chartId + '" style="width:100%;height:300px" role="img" aria-label="Seller vs Market MoM% comparison"></div>';
-
-  // ── 3. Table: MoM% only, no absolute values ──
-  html += '<div style="margin-top:10px"><table class="report-table"><thead><tr>';
-  html += '<th>Site</th><th>Seller ADG MoM%</th><th>Market ADG MoM%</th><th>Gap (pp)</th><th>ADG Share</th>';
-  if (hasAdo) html += '<th>Seller ADO MoM%</th><th>Market ADO MoM%</th><th>ADO Gap (pp)</th>';
-  html += '</tr></thead><tbody>';
-  sites.forEach(function(site, i) {
-    var gapTone = gapPp[i] != null ? (Math.abs(gapPp[i]) > 5 ? (gapPp[i] > 0 ? "up-text" : "dn-text") : "") : "";
-    var sMomTone = sellerAdgMom[i] != null ? (sellerAdgMom[i] > 0 ? "up-text" : "dn-text") : "";
-    html += '<tr><td><strong>' + esc(site) + '</strong></td>';
-    html += '<td class="' + sMomTone + '">' + (sellerAdgMom[i] != null ? formatCompact(sellerAdgMom[i]) + '%' : '—') + '</td>';
-    html += '<td>' + (mktAdgMom[i] != null ? formatCompact(mktAdgMom[i]) + '%' : '—') + '</td>';
-    html += '<td class="' + gapTone + '">' + (gapPp[i] != null ? (gapPp[i] > 0 ? '+' : '') + formatCompact(gapPp[i]) + 'pp' : '—') + '</td>';
-    html += '<td>' + (sharePct[i] != null ? formatCompact(sharePct[i]) + '%' : '—') + '</td>';
-    if (hasAdo) {
-      var aMomTone = sellerAdoMom[i] != null ? (sellerAdoMom[i] > 0 ? "up-text" : "dn-text") : "";
-      var aGapTone = adoGapPp[i] != null ? (Math.abs(adoGapPp[i]) > 5 ? (adoGapPp[i] > 0 ? "up-text" : "dn-text") : "") : "";
-      html += '<td class="' + aMomTone + '">' + (sellerAdoMom[i] != null ? formatCompact(sellerAdoMom[i]) + '%' : '—') + '</td>';
-      html += '<td>' + (mktAdoMom[i] != null ? formatCompact(mktAdoMom[i]) + '%' : '—') + '</td>';
-      html += '<td class="' + aGapTone + '">' + (adoGapPp[i] != null ? (adoGapPp[i] > 0 ? '+' : '') + formatCompact(adoGapPp[i]) + 'pp' : '—') + '</td>';
-    }
-    html += '</tr>';
-  });
-  html += '</tbody></table></div>';
-
-  // ── 4. Gap >5pp alerts ──
-  var flagSites = [];
-  for (var j = 0; j < gapPp.length; j++) {
-    if (gapPp[j] != null && Math.abs(gapPp[j]) > 5) {
-      flagSites.push({ site: sites[j], gap: gapPp[j], mom: sellerAdgMom[j], mkt: mktAdgMom[j], share: sharePct[j] });
-    }
-  }
-  if (flagSites.length) {
-    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">';
-    flagSites.forEach(function(f) {
-      html += '<div class="metric-card" style="flex:1 1 160px;min-width:140px;border-left:3px solid ' + (f.gap > 0 ? 'var(--up)' : 'var(--down)') + '">';
-      html += '<div class="label">⚠️ ' + esc(f.site) + ' |gap|>5pp</div>';
-      html += '<div class="value" style="font-size:14px">' + (f.gap > 0 ? '+' : '') + formatCompact(f.gap) + 'pp</div>';
-      html += '<div class="context">Seller: ' + (f.mom != null ? formatCompact(f.mom) + '%' : '—') + ' | Market: ' + (f.mkt != null ? formatCompact(f.mkt) + '%' : '—') + ' | Share: ' + formatCompact(f.share) + '%</div>';
-      html += '</div>';
+    var seller = num(item, "seller_adg_mom");
+    var market = firstNum(item, ["mom_mkt_adg_pct", "mkt_adg_mom"]);
+    var gap = num(item, "adg_gap_pp");
+    var share = num(item, "adg_share") || 0;
+    var adg = num(item, "adg_mtd") || 0;
+    var sellerAdo = num(item, "seller_ado_mom");
+    var marketAdo = firstNum(item, ["mom_mkt_ado_pct", "mkt_ado_mom"]);
+    var adoGap = num(item, "ado_gap_pp");
+    var comparable = seller != null && market != null && gap != null && adg > 0;
+    rows.push({
+      item: item,
+      site: site,
+      seller: seller,
+      market: market,
+      gap: gap,
+      share: share,
+      adg: adg,
+      sellerAdo: sellerAdo,
+      marketAdo: marketAdo,
+      adoGap: adoGap,
+      comparable: comparable,
+      tag: perfTag(gap),
+      priority: comparable ? Math.abs(gap) * Math.max(share, 0) : -1
     });
-    html += '</div>';
+  });
+
+  if (!rows.length) return emptyStateChart(model);
+
+  var comparableRows = rows.filter(function(r) { return r.comparable; });
+  comparableRows.sort(function(a, b) { return (b.priority || 0) - (a.priority || 0); });
+  var visualRows = comparableRows.slice(0, Math.min(8, comparableRows.length));
+  var calloutRows = visualRows.slice(0, Math.min(3, visualRows.length));
+  var calloutBySite = {};
+  calloutRows.forEach(function(r, idx) { calloutBySite[r.site] = idx + 1; });
+
+  var biggestWin = comparableRows.filter(function(r) { return r.gap >= 5; })[0] || null;
+  var biggestDrag = comparableRows.filter(function(r) { return r.gap <= -5; })[0] || null;
+  comparableRows.forEach(function(r) {
+    if (!biggestWin || r.gap > biggestWin.gap) biggestWin = r.gap >= 5 ? r : biggestWin;
+    if (!biggestDrag || r.gap < biggestDrag.gap) biggestDrag = r.gap <= -5 ? r : biggestDrag;
+  });
+  var highShareRisk = comparableRows.slice().sort(function(a, b) {
+    var ar = a.gap != null && a.gap < 0 ? a.share : -1;
+    var br = b.gap != null && b.gap < 0 ? b.share : -1;
+    return br - ar;
+  })[0] || null;
+
+  var values = [];
+  visualRows.forEach(function(r) {
+    if (r.seller != null) values.push(r.seller);
+    if (r.market != null) values.push(r.market);
+  });
+  var minVal = values.length ? Math.min.apply(null, values) : -10;
+  var maxVal = values.length ? Math.max.apply(null, values) : 10;
+  var minX = Math.min(-20, Math.floor((minVal - 5) / 10) * 10);
+  var maxX = Math.max(30, Math.ceil((maxVal + 5) / 10) * 10);
+  if (maxX - minX < 50) {
+    var mid = (maxX + minX) / 2;
+    minX = Math.floor((mid - 25) / 10) * 10;
+    maxX = Math.ceil((mid + 25) / 10) * 10;
   }
 
-  // ── 5. Benchmark breakdown (mkt_mall, mkt_cb, mkt_local — if available from Table B) ──
-  var hasMall = hasCol(model, "mom_mkt_mall_adg_pct");
-  var hasCb = hasCol(model, "mom_mkt_cb_adg_pct");
-  var hasLocal = hasCol(model, "mom_mkt_local_adg_pct");
-  if (hasMall || hasCb || hasLocal) {
-    html += '<div style="margin-top:10px"><div style="font-size:11px;font-weight:700;color:var(--muted);padding:4px 0">Market Breakdown (from autodeck__site_bu_benchmark_mi — MoM% only)</div>';
-    html += '<table class="report-table"><thead><tr><th>Site</th>';
-    if (hasMall) html += '<th>Mall MoM%</th>';
-    if (hasCb) html += '<th>CB MoM%</th>';
-    if (hasLocal) html += '<th>Local MoM%</th>';
+  function xPos(v, left, plotW) {
+    return left + (v - minX) / (maxX - minX) * plotW;
+  }
+
+  function tickValues() {
+    var out = [];
+    var step = 15;
+    var start = Math.ceil(minX / step) * step;
+    for (var t = start; t <= maxX; t += step) out.push(t);
+    if (out.indexOf(0) < 0 && minX < 0 && maxX > 0) out.push(0);
+    return out.sort(function(a, b) { return a - b; });
+  }
+
+  function chartSvg() {
+    var width = 860;
+    var height = 348;
+    var left = 126;
+    var right = 118;
+    var top = 34;
+    var bottom = 68;
+    var plotW = width - left - right;
+    var rowH = (height - top - bottom) / Math.max(1, visualRows.length);
+    var dotR = 5;
+    var html = '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="Current month site attribution dumbbell">';
+    html += '<text x="' + left + '" y="16" fill="#111827" font-size="12" font-weight="800">当月ADG环比</text>';
+    tickValues().forEach(function(t) {
+      var x = xPos(t, left, plotW);
+      html += '<line x1="' + x + '" x2="' + x + '" y1="' + (top - 8) + '" y2="' + (height - bottom + 7) + '" stroke="' + (t === 0 ? '#333' : '#d9d9d9') + '" stroke-width="' + (t === 0 ? '1.1' : '1') + '" stroke-dasharray="' + (t === 0 ? '' : '3 4') + '"></line>';
+      html += '<text x="' + x + '" y="' + (height - bottom + 22) + '" text-anchor="middle" fill="#555" font-size="10">' + t + '%</text>';
+    });
+
+    visualRows.forEach(function(r, idx) {
+      var y = top + idx * rowH + rowH * 0.55;
+      var color = perfColor(r.gap);
+      var marketX = xPos(r.market, left, plotW);
+      var sellerX = xPos(r.seller, left, plotW);
+      var callout = calloutBySite[r.site];
+      if (callout) {
+        html += '<rect x="6" y="' + (y - rowH * 0.42) + '" width="' + (width - 12) + '" height="' + (rowH * 0.84) + '" rx="4" fill="#fff3ef" opacity=".75"></rect>';
+        html += '<line x1="8" x2="8" y1="' + (y - rowH * 0.34) + '" y2="' + (y + rowH * 0.34) + '" stroke="#ee4d2d" stroke-width="1.4" stroke-linecap="round"></line>';
+      }
+      html += '<line x1="8" x2="' + (width - 8) + '" y1="' + y + '" y2="' + y + '" stroke="#eeeeee" stroke-width="1"></line>';
+      html += '<text x="12" y="' + (y + 4) + '" fill="#111827" font-size="12" font-weight="800">' + svgText(r.site) + '</text>';
+      html += '<text x="50" y="' + (y + 4) + '" fill="#666" font-size="10">' + formatCompact(r.share) + '% share</text>';
+      html += '<line x1="' + marketX + '" x2="' + sellerX + '" y1="' + y + '" y2="' + y + '" stroke="' + color + '" stroke-width="2.1" stroke-linecap="round" opacity=".62"></line>';
+      html += '<circle cx="' + marketX + '" cy="' + y + '" r="' + dotR + '" fill="#9ca3af" stroke="#555" stroke-width="1"></circle>';
+      html += '<circle cx="' + sellerX + '" cy="' + y + '" r="' + dotR + '" fill="' + color + '" stroke="#fff" stroke-width="1.8"></circle>';
+      html += '<text x="' + (width - 106) + '" y="' + (y - 2) + '" fill="' + color + '" font-size="11" font-weight="800">' + signedPpLocal(r.gap) + '</text>';
+      html += '<text x="' + (width - 106) + '" y="' + (y + 13) + '" fill="#555" font-size="9">' + svgText(r.tag) + '</text>';
+      if (callout) {
+        var cx = Math.min(width - 132, Math.max(left + 18, sellerX + (r.gap >= 0 ? 18 : -18)));
+        html += '<circle cx="' + cx + '" cy="' + (y - 11) + '" r="10" fill="#ee4d2d"></circle>';
+        html += '<text x="' + cx + '" y="' + (y - 7) + '" text-anchor="middle" fill="#fff" font-size="11" font-weight="900">' + callout + '</text>';
+      }
+    });
+
+    var legendY = height - 20;
+    html += '<circle cx="' + left + '" cy="' + (legendY - 4) + '" r="' + dotR + '" fill="#9ca3af"></circle><text x="' + (left + 10) + '" y="' + legendY + '" fill="#333" font-size="10">大盘</text>';
+    html += '<circle cx="' + (left + 80) + '" cy="' + (legendY - 4) + '" r="' + dotR + '" fill="#1f8f58"></circle><text x="' + (left + 92) + '" y="' + legendY + '" fill="#333" font-size="10">卖家跑赢</text>';
+    html += '<circle cx="' + (left + 200) + '" cy="' + (legendY - 4) + '" r="' + dotR + '" fill="#d83a2e"></circle><text x="' + (left + 212) + '" y="' + legendY + '" fill="#333" font-size="10">卖家跑输</text>';
+    html += '</svg>';
+    return html;
+  }
+
+  function rankingTable() {
+    var rowsForTable = comparableRows.slice(0, 6);
+    var html = '<table class="report-table site-attribution-table"><thead><tr>';
+    html += '<th>序号</th><th>站点</th><th>占比</th><th>卖家</th><th>大盘</th><th>差距</th>';
     html += '</tr></thead><tbody>';
-    sites.forEach(function(site, i) {
-      html += '<tr><td><strong>' + esc(site) + '</strong></td>';
-      if (hasMall) { var v = num(model.body[i], "mom_mkt_mall_adg_pct"); html += '<td>' + (v != null ? formatCompact(v) + '%' : '—') + '</td>'; }
-      if (hasCb)   { var v = num(model.body[i], "mom_mkt_cb_adg_pct");   html += '<td>' + (v != null ? formatCompact(v) + '%' : '—') + '</td>'; }
-      if (hasLocal){ var v = num(model.body[i], "mom_mkt_local_adg_pct"); html += '<td>' + (v != null ? formatCompact(v) + '%' : '—') + '</td>'; }
+    rowsForTable.forEach(function(r, idx) {
+      var tone = r.gap >= 5 ? "up-text" : (r.gap <= -5 ? "dn-text" : "");
+      var callout = calloutBySite[r.site];
+      html += '<tr>';
+      html += '<td>' + (callout ? '<span class="mini-callout">' + callout + '</span>' : (idx + 1)) + '</td>';
+      html += '<td><strong>' + esc(r.site) + '</strong></td>';
+      html += '<td>' + formatCompact(r.share) + '%</td>';
+      html += '<td>' + signedPctLocal(r.seller) + '</td>';
+      html += '<td>' + signedPctLocal(r.market) + '</td>';
+      html += '<td class="' + tone + '"><strong>' + signedPpLocal(r.gap) + '</strong></td>';
       html += '</tr>';
     });
-    html += '</tbody></table></div>';
+    html += '</tbody></table>';
+    return html;
   }
 
-  setTimeout(function() {
-    var dom = document.getElementById(chartId);
-    if (!dom) return;
-    function tryInit() {
-      if (dom.clientWidth === 0) { setTimeout(tryInit, 150); return; }
-      var existing = echarts.getInstanceByDom(dom);
-      if (existing) existing.dispose();
-      var chart = echarts.init(dom);
-      chart.setOption(option);
-      var ro = new ResizeObserver(function() { chart.resize(); });
-      ro.observe(dom); dom._resizeObserver = ro;
-    }
-    tryInit();
-  }, 200);
+  var html = '<style>';
+  html += '.site-attribution-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(330px,.85fr);gap:12px;margin:8px 0 10px;}';
+  html += '.site-attribution-panel{min-width:0;border:1px solid var(--line);border-radius:8px;background:#fff;padding:10px 12px;}';
+  html += '.site-attribution-title{font-size:13px;font-weight:760;color:var(--ink);line-height:1.2;}';
+  html += '.site-attribution-subtitle{font-size:11px;color:var(--muted);line-height:1.35;margin-top:2px;}';
+  html += '.site-attribution-chart{width:100%;height:370px;margin-top:4px;}';
+  html += '.site-attribution-chart svg{display:block;width:100%;height:100%;}';
+  html += '.site-attribution-table{width:100%;font-size:11px;}';
+  html += '.site-attribution-table th,.site-attribution-table td{text-align:center;padding:5px 4px;}';
+  html += '.mini-callout{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#ee4d2d;color:#fff;font-weight:900;font-size:11px;line-height:1;flex:0 0 20px;}';
+  html += '@media(max-width:900px){.site-attribution-grid{grid-template-columns:1fr}.site-attribution-chart{height:350px}}';
+  html += '</style>';
+
+  html += '<div class="chart-container site-attribution-grid">';
+  html += '<div class="site-attribution-panel">';
+  html += '<div class="site-attribution-title">当前月站点归因对标</div>';
+  html += '<div class="site-attribution-subtitle">按 |gap pp| × ADG share 排序；大盘/卖家点等尺寸，share只用于排序和标签，避免比例误导。</div>';
+  html += '<div class="site-attribution-chart">' + chartSvg() + '</div>';
+  html += '</div>';
+  html += '<div class="site-attribution-panel">';
+  html += '<div class="site-attribution-title">影响优先级</div>';
+  html += '<div class="site-attribution-subtitle">1/2/3 对应图上站点，并在下方数据诊断中合并解释。</div>';
+  html += rankingTable();
+  html += '</div>';
+  html += '</div>';
 
   return html;
 }
