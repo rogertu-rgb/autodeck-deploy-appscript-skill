@@ -1,6 +1,8 @@
 # DataService SDK Contract
 
-Source reference: AutoDeck tech design v_0602, section 11 "SDK — DataService API (Skill 专用数据通道)".
+Source reference:
+
+the local Obsidian tech reference `auto_deck/tech design/v_0602/Tech Reference.md`, section 11 "SDK — DataService API (Skill 专用数据通道)".
 
 ## Contract
 
@@ -9,6 +11,7 @@ Source reference: AutoDeck tech design v_0602, section 11 "SDK — DataService A
 - The raw tab contract is unchanged:
   - `raw_dws_shop`
   - `raw_benchmark`
+  - `raw_benchmark_total_site` for Shopee overall MoM% in `sec_12m_history`
   - `raw_dws_item`
 - The SDK runs SQL through the authorized AutoDeck DataService API and returns structured row dictionaries.
 - Before raw extraction, the SDK path resolves `--ggp` to an exact `ggp_account_name` from `cncbbi_general.autodeck__dws_shop_rpt_mi` using the current and prior report month:
@@ -17,6 +20,13 @@ Source reference: AutoDeck tech design v_0602, section 11 "SDK — DataService A
   - multiple candidates block the run and must be resolved by the user
   - no lookup match preserves the input so legacy exact-name runs are not broken
 - The query helper writes the same local CSV artifacts as before, then `create_report_sheet.py` writes those CSVs into Google Sheet raw tabs.
+- `raw_benchmark_site` must use the same Total-dimension MoM logic as `raw_benchmark_total_site`, except it keeps each seller site instead of filtering to `site = 'Total Site'`. Query `cncbbi_general.autodeck__site_bu_benchmark_rpt` directly with `l1 = 'Total'`, `l2 = 'Total'`, `l3 = 'Total'`, `price_band = 'Total'`, `seller_type = 'CNCB'`, and seller-site filtering from `raw_dws_shop`; do not average site benchmark across L1/L2/L3/price_band detail rows.
+- SDK raw pulls must not rely on a single OLAP response when the response reaches the DataService row cap. Treat `20,000` returned rows as a cap signal, not as proof of completeness.
+- Capped raw pulls must be refetched with deterministic site-first slices and merged locally:
+  - `raw_dws_shop`: `site` first, then `year_month`, `l1`, `l2`, `l3` only if a site slice still reaches the cap.
+  - `raw_benchmark_price`: `site` first, then `year_month`, `l1`, `l2`, `l3`, `price_band` only if a site slice still reaches the cap.
+  - other capped `raw_benchmark_*` tabs use site-first splitting with the dimensions present in the tab.
+- `query_summary.json` must expose `api_cap_hit`, `split_strategy`, and `max_split_rows` when splitting occurs so row completeness can be audited before Sheet publish.
 
 ## Benchmark RPT Normalization
 
