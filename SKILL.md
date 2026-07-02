@@ -1,10 +1,12 @@
 ---
 name: autodeck-deploy-appscript
 description: Generate and publish a complete AutoDeck seller visit diagnosis HTML report to Google Apps Script from a local OAuth credential and a GGP account name. Use when a user asks to run AutoDeck end-to-end, create a seller monthly diagnosis HTML, publish a seller visit report, deploy AutoDeck to App Script, or generate an AutoDeck report from v_0602/Future Architecture materials. The workflow validates OAuth, pulls or reuses raw AutoDeck data, creates or reuses a Google Sheet, runs the existing build_sections.py section builder, renders a Sheet-backed HTML report, runs guardrail checks, and deploys Code.gs/Index.html/appsscript.json through the Apps Script API.
-version: 0.2.0
+version: 0.2.17
 ---
 
 # AutoDeck Deploy AppScript
+
+Skill revision: 0.2.18
 
 ## Overview
 
@@ -93,6 +95,8 @@ Optional DataService overrides:
 - `--dataservice-base-url`
 - `--dataservice-queue`
 - `--dataservice-end-user`
+- `--query-limit`: SDK local row cap. Default is `0`, meaning no local truncation. Do not use `2000` for production seller reports.
+- `--script-id` and `--deployment-id`: update an existing Apps Script project/deployment so the Web App URL stays stable. Use these when the user asks to update the current link instead of creating a new link.
 
 Recommended environment variables for GitHub installs:
 
@@ -127,6 +131,12 @@ Preferred current path:
 - In SDK mode, `scripts/query_raw_data.py` resolves `--ggp` before pulling raw data: exact match first, then partial-name lookup against `autodeck__dws_shop_rpt_mi` for the report month and prior month. If multiple plausible accounts match, stop with candidates instead of silently choosing.
 - If `--sheet-id` is provided and raw tabs exist, reuse it.
 - Otherwise use `scripts/query_raw_data.py` with the DataService SDK backend from `references/dataservice-sdk-contract.md`.
+- Standard SDK pulls must not locally cap rows. Use the default `--query-limit 0` unless the user explicitly asks for a sampled/debug run.
+- DataService OLAP responses can cap at 20,000 rows even when local `--query-limit` is `0`. If any supported raw pull hits that cap, `query_raw_data.py` must refetch it with deterministic site-first slices and merge the slices locally. Required split behavior:
+  - `raw_dws_shop`: split by `site`; if a site still hits the cap, split deeper by `year_month`, `l1`, `l2`, then `l3`.
+  - `raw_benchmark_price`: split by `site`; if a site still hits the cap, split deeper by `year_month`, `l1`, `l2`, `l3`, then `price_band`.
+  - any capped `raw_benchmark_*` tab should use the same site-first pattern with only the dimensions present in that tab.
+  - write split metadata into `query_summary.json` (`api_cap_hit`, `split_strategy`, `max_split_rows`) so row-completeness can be audited before publishing.
 
 The SDK path follows Tech Reference v_0602 section 11, "SDK — DataService API (Skill 专用数据通道)". It directly calls the authorized DataService API and writes the same raw CSV artifacts as before.
 
@@ -185,8 +195,22 @@ The renderer must follow `references/report-interaction-and-analysis-contract.md
 - show a professional seller-visit report shell with sticky header, section rail, section search, storyline gate decisions, chart/table visuals, compact evidence cards, generated takeaways, and collapsible source tables
 - expose all storyline gate decisions in the executive area, even if the source Sheet does not include a literal `Gate Config` tab; derive gate state from `sec_site_benchmark`, `sec_l1_overview`, and `sec_subsidy`
 - render each section with a chart-like primary visual before analysis; metric cards or raw/filterable tables alone are not sufficient
-- render `sec_12m_history` as a screenshot-style monthly stacked bar chart by site ADG contribution with total labels, date labels, and site legend; do not use a dual-axis bar/line chart for this section
+- render `sec_12m_history` as a split diagnostic visual: default left panel is a 100% stacked monthly site-share chart with total ADG labels and a toggle to absolute stacked ADG; right panel compares GGP MoM% with Shopee overall MoM% from `raw_benchmark_total_site` and shows Seller - Shopee gap pp
+- omit the generic row-filter dropdown for `sec_12m_history`; its site mix is already controlled by the chart legend/tooltips
+- build `raw_benchmark_site` from `cncbbi_general.autodeck__site_bu_benchmark_rpt` using the same Total-dimension benchmark logic as `raw_benchmark_total_site`, except keep each seller site instead of `site = 'Total Site'`: require `l1 = 'Total'`, `l2 = 'Total'`, `l3 = 'Total'`, `price_band = 'Total'`, and `seller_type = 'CNCB'`
+- title `sec_site_benchmark` as `各站点增速对标大盘`; render it as a current-month site-attribution dumbbell, not a historical grouped bar
+- render `sec_l1_overview` as a site x L1 diagnostic matrix: color cells by seller-market gap pp, show an in-cell share bar for L1 share within site, and mark the top 1/2/3 drilldown cells by `abs(gap_pp) * share_in_site`
+- render `sec_l2_drill` as four attribution lanes instead of a crowded full heatmap: high-share underperformers, absolute scale leaders, fastest growers, and large-share decliners; each lane must show site, L1 > L2, share, ADG, seller MoM, market MoM, and gap where available
+- build `sec_l2_drill` at `site × L1 × L2` grain, not `site × L2` and not a selected-L1-only rollup; `share_in_l1` must use the current-month total ADG of the same `site × L1` as denominator, so a multi-L2 L1 cannot show every L2 as 100%
+- render `sec_l3_granular` as a proof/evidence table with share bars, ADG bars, seller MoM, P50, seller-P50 gap, and action tags; if P50 is missing, label the row as seller-side evidence and do not claim a market benchmark gap
+- build `sec_l3_granular` at `site × L1 × L2 × L3` grain, not `site × L3` and not a selected-L2-only leaf rollup; generic leaves such as `Other` / `Others` must retain their parent `L1 > L2` path and must not collapse across parents
+- for category identity, never show only the leaf category in L2/L3 sections: L2 labels must include `L1 > L2`, and L3 labels must include `L1 > L2 > L3` in the primary visual, source/proof table, and computed-analysis bullets
+- title `sec_volatility` as `类目站点异常信号扫描`; render it as an anomaly workbench, not signal count cards or a raw signal table
+- title `sec_shop_impact` as `店铺贡献分析`; enrich it from `raw_dws_shop` after the standard builder so the section first finds each site's key driver shops, then dives those shops to `L3 × price_range` and traffic funnel diagnostics
+- enrich downstream commercial sections after the standard builder with `scripts/enrich_commercial_sections.py`; `sec_listing_change`, `sec_fulfillment`, `sec_traffic_channel`, `sec_subsidy`, and `sec_ams` must use enriched raw-tab-derived views rather than sparse legacy tabs
+- title `sec_ams` as `ADS出单效率审计`; compute site-level `ads_ado_share`, `ads_adg_share`, `ads_spend_gmv`, `ROAS = ads_adg / ads_spend`, and `HE1 Ads ADG % = ads_adg / total_adg` unless a dedicated HE1 field is later added
 - keep a visible filterable important-row table after the primary visual as supporting evidence, not as the primary visual fallback
+- for top highlight takeaways, use compact circular `1/2/3` callouts that appear on the primary visual, the important-row table where practical, and the matching Chinese computed-analysis bullet
 - use the section analysis framework to generate actual bullet points from numeric section rows, not raw placeholder text from `sec_text`
 - make every generated takeaway traceable to a same-section evidence chip that highlights the source row and metric in the table
 - keep full raw tables available as supporting evidence, but do not let raw tables become the primary report experience
@@ -212,16 +236,20 @@ Core checks:
 
 ### 7. Deploy
 
-Use `scripts/deploy_appscript.py`. It creates a new Apps Script project, uploads:
+Use `scripts/deploy_appscript.py`. By default it creates a new Apps Script project. If `--script-id` and `--deployment-id` are provided, it reuses the existing Apps Script project, creates a new version, updates that deployment, and keeps the same Web App URL.
+
+It uploads:
 
 - `appsscript` manifest
 - `Code` server JS
 - `Index` HTML
 
-Then creates a version and deployment. Return both:
+Then creates a version and either creates or updates the deployment. Return both:
 
 - Google Sheet URL
 - Apps Script Web App URL
+
+Stable-link rule: if the user references "current link", "same link", or "do not create a new link", use the current run's saved `script_id` and `deployment_id` from `run_summary.json` and pass them through `autodeck_run.py`.
 
 ## Important References
 
