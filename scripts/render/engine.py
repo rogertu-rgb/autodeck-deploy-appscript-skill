@@ -43,20 +43,35 @@ class Engine:
     # ── Chinese column labels ──
     COL_LABELS_ZH: Dict[str, str] = {
         "year_month": "月份", "site": "站点", "l1": "一级品类", "l2": "二级品类", "l3": "三级品类",
-        "shop_id": "店铺ID", "shop_name": "店铺名", "item_name": "商品名",
+        "scope": "范围", "rank_type": "排名类型", "rank": "排名", "top_site": "主要站点",
+        "shop_id": "店铺ID", "shop_name": "店铺名", "item_id": "商品ID", "item_name": "商品名",
         "price_range": "价格带", "price_band": "价格带",
         "adg": "ADG", "adg_mtd": "当月ADG", "adg_m1": "上月ADG",
         "mtd_adg": "当月ADG", "m1_adg": "上月ADG",
         "seller_adg": "卖家ADG", "ads_adg": "广告ADG", "total_adg": "总ADG",
         "ado": "ADO", "ado_mtd": "当月ADO", "ado_m1": "上月ADO",
+        "adimp_mtd": "当月日均曝光", "adclick_mtd": "当月日均点击",
+        "adimp_m1": "上月日均曝光", "adclick_m1": "上月日均点击",
+        "adimp_delta": "日均曝光变化", "adclick_delta": "日均点击变化",
+        "ctr_mtd": "当月CTR", "cr_mtd": "当月CR",
+        "ctr_m1": "上月CTR", "cr_m1": "上月CR",
+        "ctr_delta_pp": "CTR变化", "cr_delta_pp": "CR变化",
+        "adg_per_order_mtd": "当月单均ADG", "adg_per_order_delta": "单均ADG变化",
         "ads_ado": "广告ADO", "total_ado": "总ADO",
-        "adg_mom": "ADG环比", "seller_adg_mom": "卖家ADG环比",
+        "adg_mom": "ADG环比", "adimp_mom": "曝光环比", "adclick_mom": "点击环比", "seller_adg_mom": "卖家ADG环比",
+        "shopee_adg_mom": "Shopee ADG环比", "shopee_ado_mom": "Shopee ADO环比",
         "mkt_adg_mom": "大盘ADG环比", "ado_mom": "ADO环比",
         "seller_ado_mom": "卖家ADO环比", "mkt_ado_mom": "大盘ADO环比",
         "adg_gap_pp": "ADG差距", "ado_gap_pp": "ADO差距", "gap_pp": "差距(pp)",
         "adg_share": "ADG占比", "ado_share": "ADO占比",
+        "source_label": "来源/手段", "source_group": "来源类型",
+        "ctr": "CTR", "cr": "CR", "mtd_adpv": "当月ADPV", "mtd_adimp": "当月曝光",
+        "fulfillment_ado": "履约ADO", "local_ado": "本地履约ADO", "local_share": "本地履约占比",
+        "local_shift_pp": "本地履约变化", "fulfillment_coverage": "履约覆盖率",
+        "ads_ado_share": "广告ADO占比", "he1_ads_adg_pct": "HE1 Ads ADG%",
+        "ads_spend_gmv": "Ads Spend/GMV", "efficiency_status": "效率判断",
         "share_in_site": "站内占比", "share_in_l3": "L3占比",
-        "contribution_pct": "贡献度", "total": "合计",
+        "contribution_pct": "贡献度", "site_delta_contribution_pct": "站点波动贡献", "primary_driver": "主要驱动", "total": "合计",
         "fbs_share": "FBS占比", "tpf_share": "TPF占比", "sls_share": "SLS占比",
         "fbs_shift_pp": "FBS变化", "tpf_shift_pp": "TPF变化", "sls_shift_pp": "SLS变化",
         "organic_share": "自然流量占比", "ads_share": "广告占比",
@@ -224,6 +239,8 @@ function formatValue(value, col) {
   var n = parseNum(value);
   if (n == null) return String(value);
   if (key.indexOf("gap") >= 0 || key.indexOf("shift") >= 0 || key.indexOf("bias") >= 0) return formatCompact(n) + "pp";
+  if (key === "ctr" || key === "cr" || key === "ctr_mtd" || key === "cr_mtd" || key === "ctr_m1" || key === "cr_m1") return formatCompact(n * 100) + "%";
+  if (key === "ads_spend_gmv" || key === "fulfillment_coverage") return formatCompact(n) + "%";
   if (key.indexOf("mom") >= 0 || key.indexOf("share") >= 0 || key.indexOf("pct") >= 0) return formatCompact(n) + "%";
   if (key === "roas") return n.toFixed(1).replace(/\.0$/, "");
   return formatCompact(n);
@@ -288,7 +305,7 @@ function rowsModel(rows) {
 }
 
 function rowLabel(header, row) {
-  var preferred = ["site", "l1", "l2", "l3", "price_range", "shop_id", "year_month", "item_name"];
+  var preferred = ["site", "source_label", "l1", "l2", "l3", "price_range", "shop_id", "item_id", "year_month", "item_name"];
   var parts = [];
   preferred.forEach(function(col) {
     var idx = header.map(norm).indexOf(col);
@@ -504,20 +521,22 @@ function filterableTableHtml(model, maxRows, isOpen) {
   // Build filter dropdown — exclude JSON cells
   var catCols = categoricalColumns(model);
   var filterHtml = "";
-  catCols.forEach(function(cat) {
-    var values = {};
-    body.forEach(function(item) {
-      var v = sanitizeCell(item.row[cat.idx], cat.col);
-      if (v && String(v).charAt(0) !== "{" && String(v).charAt(0) !== "[") values[v] = (values[v] || 0) + 1;
+  if (model.id !== "sec_12m_history") {
+    catCols.forEach(function(cat) {
+      var values = {};
+      body.forEach(function(item) {
+        var v = sanitizeCell(item.row[cat.idx], cat.col);
+        if (v && String(v).charAt(0) !== "{" && String(v).charAt(0) !== "[") values[v] = (values[v] || 0) + 1;
+      });
+      var keys = Object.keys(values).sort();
+      if (keys.length > 1 && keys.length <= 30) {
+        filterHtml += '<select data-row-filter="' + esc(model.id || "") + '" style="margin:4px 4px 4px 0;font-size:11px;padding:4px 6px;border:1px solid var(--line);border-radius:4px">';
+        filterHtml += '<option value="">All ' + esc(prettyCol(cat.col)) + '</option>';
+        keys.forEach(function(k) { filterHtml += '<option value="' + esc(k) + '">' + esc(k) + ' (' + values[k] + ')</option>'; });
+        filterHtml += '</select>';
+      }
     });
-    var keys = Object.keys(values).sort();
-    if (keys.length > 1 && keys.length <= 30) {
-      filterHtml += '<select data-row-filter="' + esc(model.id || "") + '" style="margin:4px 4px 4px 0;font-size:11px;padding:4px 6px;border:1px solid var(--line);border-radius:4px">';
-      filterHtml += '<option value="">All ' + esc(prettyCol(cat.col)) + '</option>';
-      keys.forEach(function(k) { filterHtml += '<option value="' + esc(k) + '">' + esc(k) + ' (' + values[k] + ')</option>'; });
-      filterHtml += '</select>';
-    }
-  });
+  }
 
   var detailsOpen = isOpen ? " open" : "";
   var html = filterHtml;
@@ -882,6 +901,11 @@ function signedPp(n) {
   return (n > 0 ? "+" : "") + formatCompact(n) + "pp";
 }
 
+function signedDelta(n) {
+  if (!validNumber(n)) return "—";
+  return (n > 0 ? "+" : "") + formatCompact(n);
+}
+
 function toneWord(n, upWord, downWord, flatWord) {
   if (!validNumber(n) || Math.abs(n) < 0.5) return flatWord || "持平";
   return n > 0 ? (upWord || "上升") : (downWord || "下降");
@@ -889,6 +913,28 @@ function toneWord(n, upWord, downWord, flatWord) {
 
 function rowName(item) {
   return item && item.label ? item.label : "该行";
+}
+
+function fullCategoryLabel(item, levels, fallback) {
+  fallback = fallback || {};
+  var site = String(val(item, "site") || fallback.site || "").trim();
+  var parts = [];
+  (levels || ["l1", "l2", "l3"]).forEach(function(col) {
+    var v = String(val(item, col) || fallback[col] || "").trim();
+    if (v && v !== "Total") parts.push(v);
+  });
+  var path = parts.join(" > ");
+  if (site && path) return site + " / " + path;
+  if (path) return path;
+  return rowName(item);
+}
+
+function l2CategoryLabel(item, fallback) {
+  return fullCategoryLabel(item, ["l1", "l2"], fallback);
+}
+
+function l3CategoryLabel(item, fallback) {
+  return fullCategoryLabel(item, ["l1", "l2", "l3"], fallback);
 }
 
 function evidenceChip(model, item, col, label) {
@@ -904,10 +950,14 @@ function analysisLine(text, evidenceHtml) {
   return '<li>' + esc(text) + (evidenceHtml ? ' <span class="evidence-strip" style="display:inline-flex;padding:0;margin-left:6px">' + evidenceHtml + '</span>' : '') + '</li>';
 }
 
+function analysisCalloutLine(idx, text, evidenceHtml) {
+  return '<li class="analysis-callout-line"><span class="analysis-callout-marker">' + esc(idx) + '</span><span class="analysis-callout-text">' + esc(text) + (evidenceHtml ? ' <span class="evidence-strip" style="display:inline-flex;padding:0;margin-left:6px">' + evidenceHtml + '</span>' : '') + '</span></li>';
+}
+
 function analysisBlock(model, lines) {
   lines = (lines || []).filter(Boolean);
   if (!lines.length) lines = [analysisLine("本节暂无足够数据形成明确诊断，建议先确认该Section的数据抽取是否完整。", "")];
-  return '<div class="analysis" data-analysis-mode="computed"><div class="analysis-label">Computed Analysis</div><ul class="analysis-list" style="margin:4px 0 0 18px;padding:0;line-height:1.75">' + lines.join("") + '</ul></div>';
+  return '<div class="analysis" data-analysis-mode="computed"><div class="analysis-label">数据诊断</div><ul class="analysis-list" style="margin:4px 0 0 18px;padding:0;line-height:1.75">' + lines.join("") + '</ul></div>';
 }
 
 function topBy(model, col, opts) {
@@ -969,8 +1019,13 @@ function weightedAvg(model, valueCol, weightCol) {
   return deno ? nume / deno : null;
 }
 
+function activeTabs() {
+  return ((window.AUTODECK_ACTIVE_DATA && window.AUTODECK_ACTIVE_DATA.tabs) ||
+          (window.AUTODECK_LOCAL_DATA && window.AUTODECK_LOCAL_DATA.tabs) || {});
+}
+
 function metaDict(sectionId) {
-  var tabs = (window.AUTODECK_LOCAL_DATA && window.AUTODECK_LOCAL_DATA.tabs) || {};
+  var tabs = activeTabs();
   var rows = tabs[sectionId + "_meta"] || [];
   var out = {};
   rows.forEach(function(row) {
@@ -994,7 +1049,7 @@ function parseLooseJson(raw, fallback) {
 }
 
 function getModelById(id) {
-  var tabs = (window.AUTODECK_LOCAL_DATA && window.AUTODECK_LOCAL_DATA.tabs) || {};
+  var tabs = activeTabs();
   var order = (window.AUTODECK_LANG === "zh" && window.AUTODECK_SECTION_ORDER_ZH)
     ? window.AUTODECK_SECTION_ORDER_ZH
     : window.AUTODECK_SECTION_ORDER;
@@ -1010,8 +1065,131 @@ function cleanPhrase(text) {
     .trim();
 }
 
+function sellerDataPresent(item, shareCols) {
+  shareCols = shareCols || ["adg_share", "share_in_site", "share_in_l1", "share_in_l2"];
+  var adg = num(item, "adg_mtd");
+  var prev = num(item, "adg_m1");
+  var mom = num(item, "adg_mom");
+  var sellerMom = num(item, "seller_adg_mom");
+  if (validNumber(adg) && adg > 0) return true;
+  if (validNumber(prev) && prev > 0) return true;
+  if (validNumber(mom)) return true;
+  if (validNumber(sellerMom)) return true;
+  for (var i = 0; i < shareCols.length; i++) {
+    var s = num(item, shareCols[i]);
+    if (validNumber(s) && s > 0) return true;
+  }
+  return false;
+}
+
+function sameRowIdentity(a, b, cols) {
+  return cols.every(function(col) { return String(val(a, col) || "") === String(val(b, col) || ""); });
+}
+
 function siteFromPath(path) {
   return String(path || "").split("/")[0] || "";
+}
+
+function volatilitySignalParts(path) {
+  var p = String(path || "").split("/");
+  return {
+    site: p[0] || "",
+    l1: p[1] || "",
+    l2: p[2] || "",
+    l3: p.slice(3).join("/") || ""
+  };
+}
+
+function volatilitySignalLabel(signal) {
+  if (signal === "VOLATILE_DOWN") return "暴跌";
+  if (signal === "VOLATILE_UP") return "暴涨";
+  if (signal === "MARKET_DIVERGENT") return "市场背离";
+  if (signal === "SHARE_SHIFT") return "份额迁移";
+  if (signal === "NEW_ENTRY") return "新进入";
+  if (signal === "EXIT") return "消失";
+  return signal || "Signal";
+}
+
+function volatilityRoute(d) {
+  if (!d) return "继续观察";
+  if (d.redAlert || d.signal === "VOLATILE_DOWN") return "查 Listing / 履约";
+  if (d.signal === "MARKET_DIVERGENT") return "查补贴 / 根因";
+  if (d.signal === "VOLATILE_UP" || d.antiGrowth) return "复盘正向动作";
+  if (d.signal === "SHARE_SHIFT") return "回到品类下钻";
+  if (d.signal === "NEW_ENTRY" || d.signal === "EXIT") return "查店铺/商品变化";
+  return "继续观察";
+}
+
+function volatilityEnrichedSignals(rawSignals, scatterRaw) {
+  rawSignals = Array.isArray(rawSignals) ? rawSignals.slice() : [];
+  scatterRaw = Array.isArray(scatterRaw) ? scatterRaw : [];
+  if (!rawSignals.length && scatterRaw.length) {
+    rawSignals = scatterRaw.map(function(p) {
+      var seller = parseNum(p.seller_mom);
+      var market = parseNum(p.mkt_mom);
+      return {
+        path: p.site_l3 || [p.site, p.l1, p.l2, p.l3].filter(Boolean).join("/"),
+        signal: "SCATTER",
+        mom: seller,
+        gap_pp: validNumber(seller) && validNumber(market) ? seller - market : null,
+        adg_mtd: parseNum(p.adg_mtd || p.adg || p.mtd_adg)
+      };
+    });
+  }
+  var out = rawSignals.map(function(s, idx) {
+    var path = String(s.path || s.site_l3 || [s.site, s.l1, s.l2, s.l3].filter(Boolean).join("/"));
+    var p = volatilitySignalParts(path);
+    var mom = parseNum(s.mom != null ? s.mom : s.seller_mom);
+    var gap = parseNum(s.gap_pp);
+    var market = parseNum(s.market_mom != null ? s.market_mom : (s.mkt_mom != null ? s.mkt_mom : s.market));
+    if (!validNumber(market) && validNumber(mom) && validNumber(gap)) market = mom - gap;
+    var adg = parseNum(s.adg_mtd != null ? s.adg_mtd : (s.mtd_adg != null ? s.mtd_adg : s.adg));
+    if (!validNumber(adg)) adg = 0;
+    var genericPath = /\/Other(s)?$/i.test(path) || /\/Other(s)?\//i.test(path);
+    var extremeGap = validNumber(gap) && Math.abs(gap) > 300;
+    var lowVolume = adg < 5;
+    var lowConfidence = genericPath || extremeGap || lowVolume;
+    var redAlert = validNumber(mom) && validNumber(market) && validNumber(gap) && mom < 0 && market > 0 && gap < -15 && adg >= 5;
+    var antiGrowth = validNumber(mom) && validNumber(market) && mom > 0 && market < 0;
+    var confidence = (genericPath ? .72 : 1) * (extremeGap ? .45 : 1) * (lowVolume ? .55 : 1);
+    var scoreBase = validNumber(gap) ? Math.abs(gap) : Math.abs(mom || 0);
+    var d = {
+      id: "vol-s" + idx,
+      path: path,
+      signal: s.signal || "SCATTER",
+      mom: mom,
+      gap_pp: gap,
+      market: market,
+      adg_mtd: adg,
+      genericPath: genericPath,
+      extremeGap: extremeGap,
+      lowVolume: lowVolume,
+      lowConfidence: lowConfidence,
+      redAlert: redAlert,
+      antiGrowth: antiGrowth,
+      confidence: confidence,
+      score: scoreBase * Math.log(adg + 2) * confidence,
+      site: p.site,
+      l1: p.l1,
+      l2: p.l2,
+      l3: p.l3
+    };
+    d.route = volatilityRoute(d);
+    return d;
+  }).filter(function(d) {
+    return validNumber(d.mom) || validNumber(d.gap_pp) || d.adg_mtd > 0;
+  });
+  out.sort(function(a, b) { return b.score - a.score; });
+  return out;
+}
+
+function volatilityDefaultRows(data) {
+  data = Array.isArray(data) ? data : [];
+  var rows = data.filter(function(d) { return !d.lowConfidence && !d.lowVolume; });
+  if (!rows.length) rows = data.filter(function(d) { return !d.lowConfidence; });
+  if (!rows.length) rows = data.slice();
+  rows.sort(function(a, b) { return b.score - a.score; });
+  return rows;
 }
 
 function sectionHistoryAnalysis(model) {
@@ -1038,10 +1216,20 @@ function sectionHistoryAnalysis(model) {
   var low = months.slice().filter(function(m) { return m.total > 0; }).sort(function(a, b) { return a.total - b.total; })[0] || months[0];
   var latestTop = last.rows.slice().sort(function(a, b) { return (num(b, "adg") || 0) - (num(a, "adg") || 0); })[0];
   var mom = prev && prev.total ? (last.total - prev.total) / prev.total * 100 : null;
+  var shopeeMom = null;
+  last.rows.some(function(item) {
+    var n = num(item, "shopee_adg_mom");
+    if (validNumber(n)) {
+      shopeeMom = n;
+      return true;
+    }
+    return false;
+  });
   var lines = [];
+  var marketGap = validNumber(mom) && validNumber(shopeeMom) ? mom - shopeeMom : null;
   lines.push(analysisLine(
-    "最新月总ADG为 " + formatCompact(last.total) + (validNumber(mom) ? "，较上一可比月" + signedPct(mom) : "") + "；12个月峰值出现在 " + peak.label + "（" + formatCompact(peak.total) + "），低点为 " + low.label + "（" + formatCompact(low.total) + "）。",
-    latestTop ? evidenceChip(model, latestTop, "total_adg", "最新月总ADG " + formatCompact(last.total)) : ""
+    "最新月总ADG为 " + formatCompact(last.total) + (validNumber(mom) ? "，GGP较上一可比月" + signedPct(mom) : "") + (validNumber(shopeeMom) ? "，同期Shopee大盘MoM为" + signedPct(shopeeMom) : "") + (validNumber(marketGap) ? "，Seller - Shopee gap为" + signedPp(marketGap) + (marketGap >= 0 ? "，本月跑赢大盘" : "，本月跑输大盘") : "") + "；12个月峰值出现在 " + peak.label + "（" + formatCompact(peak.total) + "），低点为 " + low.label + "（" + formatCompact(low.total) + "）。",
+    latestTop ? evidenceChip(model, latestTop, validNumber(shopeeMom) ? "shopee_adg_mom" : "total_adg", validNumber(shopeeMom) ? "Shopee MoM " + signedPct(shopeeMom) : "最新月总ADG " + formatCompact(last.total)) : ""
   ));
   if (latestTop) {
     var latestTopName = val(latestTop, "site") || rowName(latestTop);
@@ -1059,6 +1247,14 @@ function sectionBenchmarkAnalysis(model) {
   var scale = rows.slice().sort(function(a, b) { return (num(b, "adg_mtd") || 0) - (num(a, "adg_mtd") || 0); })[0];
   var gap = topBy(model, "adg_gap_pp", { abs: true });
   var lag = topBy(model, "adg_gap_pp", { asc: true });
+  var calloutRows = rows.filter(function(item) {
+    return validNumber(num(item, "seller_adg_mom")) && validNumber(num(item, "mkt_adg_mom")) && validNumber(num(item, "adg_gap_pp")) && (num(item, "adg_mtd") || 0) > 0;
+  }).sort(function(a, b) {
+    var ap = Math.abs(num(a, "adg_gap_pp") || 0) * Math.max(num(a, "adg_share") || 0, 0);
+    var bp = Math.abs(num(b, "adg_gap_pp") || 0) * Math.max(num(b, "adg_share") || 0, 0);
+    return bp - ap;
+  }).slice(0, 3);
+  var calloutLabels = calloutRows.map(function(item) { return rowName(item); });
   var same = 0, comparable = 0;
   rows.forEach(function(item) {
     var seller = num(item, "seller_adg_mom");
@@ -1068,19 +1264,37 @@ function sectionBenchmarkAnalysis(model) {
     if ((seller >= 0 && mkt >= 0) || (seller < 0 && mkt < 0)) same += 1;
   });
   var lines = [];
-  if (scale) {
+  calloutRows.forEach(function(item, idx) {
+    var site = rowName(item);
+    var seller = num(item, "seller_adg_mom");
+    var market = num(item, "mkt_adg_mom");
+    var g = num(item, "adg_gap_pp");
+    var share = num(item, "adg_share");
+    var route = "表现接近大盘，优先作为对照组观察。";
+    if (g >= 5) {
+      route = "跑赢大盘，建议复盘该站点的商品、流量和履约动作，判断能否复制到同类站点。";
+    } else if (g <= -5) {
+      route = "跑输大盘，建议优先检查该站点 listing、流量和履约是否存在卖家自身问题。";
+    }
+    lines.push(analysisCalloutLine(
+      idx + 1,
+      site + " 是当前第" + (idx + 1) + "优先站点归因信号：卖家ADG MoM " + signedPct(seller) + "，大盘MoM " + signedPct(market) + "，差距 " + signedPp(g) + "，ADG占比 " + formatValue(val(item, "adg_share"), "adg_share") + "；" + route,
+      evidenceChip(model, item, "adg_gap_pp", "差距 " + signedPp(g)) + evidenceChip(model, item, "adg_share", "ADG占比 " + formatValue(val(item, "adg_share"), "adg_share"))
+    ));
+  });
+  if (scale && calloutLabels.indexOf(rowName(scale)) < 0) {
     lines.push(analysisLine(
       rowName(scale) + "是当前最大站点，ADG " + formatCompact(num(scale, "adg_mtd") || 0) + "，占GGP " + formatValue(val(scale, "adg_share"), "adg_share") + "；其卖家MoM为 " + signedPct(num(scale, "seller_adg_mom")) + "，大盘MoM为 " + signedPct(num(scale, "mkt_adg_mom")) + "。",
       evidenceChip(model, scale, "adg_mtd", "站点ADG " + formatValue(val(scale, "adg_mtd"), "adg_mtd"))
     ));
   }
-  if (gap) {
+  if (!calloutRows.length && gap) {
     lines.push(analysisLine(
       "最大相对偏离来自 " + rowName(gap) + "，卖家与大盘ADG MoM差距为 " + signedPp(num(gap, "adg_gap_pp")) + "；" + (Math.abs(num(gap, "adg_gap_pp")) > 5 ? "已超过5pp阈值，需要进入品类和运营维度拆解。" : "暂未超过5pp阈值。"),
       evidenceChip(model, gap, "adg_gap_pp", "ADG gap " + signedPp(num(gap, "adg_gap_pp")))
     ));
   }
-  if (lag && num(lag, "adg_gap_pp") < -5) {
+  if (lag && num(lag, "adg_gap_pp") < -5 && calloutLabels.indexOf(rowName(lag)) < 0) {
     lines.push(analysisLine(
       rowName(lag) + "显著跑输大盘（" + signedPp(num(lag, "adg_gap_pp")) + "），优先检查该站点的listing、流量和履约是否出现卖家自身问题。",
       evidenceChip(model, lag, "adg_gap_pp", "跑输 " + signedPp(num(lag, "adg_gap_pp")))
@@ -1102,6 +1316,25 @@ function sectionL1Analysis(model) {
   var top3Share = topNBy(model, "adg_share", 3, { positive: true }).reduce(function(s, item) { return s + (num(item, "adg_share") || 0); }, 0);
   var volatileCount = movers.filter(function(item) { return Math.abs(num(item, "adg_mom") || 0) > 10; }).length;
   var lines = [];
+  var matrix = getModelById("sec_l1_matrix");
+  var matrixPriorities = (matrix.body || []).filter(function(item) {
+    return sellerDataPresent(item, ["share_in_site"]) &&
+      validNumber(num(item, "gap_pp")) &&
+      ((num(item, "adg_mtd") || 0) > 0 || (num(item, "share_in_site") || 0) > 0);
+  }).sort(function(a, b) {
+    var ap = Math.abs(num(a, "gap_pp") || 0) * Math.max(num(a, "share_in_site") || 0, 0.5);
+    var bp = Math.abs(num(b, "gap_pp") || 0) * Math.max(num(b, "share_in_site") || 0, 0.5);
+    return bp - ap;
+  }).slice(0, 3);
+  matrixPriorities.forEach(function(item, idx) {
+    var g = num(item, "gap_pp");
+    var route = g <= -5 ? "应优先下钻到L2/L3验证卖家侧问题。" : (g >= 5 ? "可复盘该站点品类打法并判断是否可复制。" : "可作为对照格子观察。");
+    lines.push(analysisCalloutLine(
+      idx + 1,
+      "编号" + (idx + 1) + "对应矩阵中的 " + (val(item, "site") || "—") + " × " + (val(item, "l1") || "—") + "：站内占比 " + formatValue(val(item, "share_in_site"), "share_in_site") + "，ADG " + formatCompact(num(item, "adg_mtd") || 0) + "，卖家MoM " + signedPct(num(item, "adg_mom")) + "，大盘MoM " + signedPct(num(item, "mkt_adg_mom")) + "，gap " + signedPp(g) + "；" + route,
+      ""
+    ));
+  });
   if (top) {
     lines.push(analysisLine(
       "Top L1为 " + rowName(top) + "，贡献ADG " + formatCompact(num(top, "adg_mtd") || 0) + "，占比 " + formatValue(val(top, "adg_share"), "adg_share") + "；Top3 L1合计占比约 " + formatCompact(top3Share) + "%，这是品类集中度的主判断口径。",
@@ -1165,55 +1398,102 @@ function sectionMatrixAnalysis(model) {
 }
 
 function sectionL2Analysis(model) {
-  var delta = topBy(model, "adg_delta", { abs: true });
-  var gap = topBy(model, "gap_pp", { abs: true });
-  var share = topBy(model, "share_in_l1", { positive: true });
+  var md = metaDict("sec_l2_drill");
+  var fallback = { l1: md.l1_filter || md.l1 || "" };
+  var rows = model.body.filter(function(item) { return sellerDataPresent(item, ["share_in_l1"]); });
+  var calloutRows = rows.filter(function(item) {
+    return validNumber(num(item, "gap_pp")) && ((num(item, "adg_mtd") || 0) > 0 || (num(item, "share_in_l1") || 0) > 0);
+  }).sort(function(a, b) {
+    var ap = Math.abs(num(a, "gap_pp") || 0) * Math.max(num(a, "share_in_l1") || 0, 0.5);
+    var bp = Math.abs(num(b, "gap_pp") || 0) * Math.max(num(b, "share_in_l1") || 0, 0.5);
+    return bp - ap;
+  }).slice(0, 3);
+  var delta = rows.slice().sort(function(a, b) { return Math.abs(num(b, "adg_delta") || 0) - Math.abs(num(a, "adg_delta") || 0); })[0];
+  var share = rows.slice().sort(function(a, b) { return (num(b, "share_in_l1") || 0) - (num(a, "share_in_l1") || 0); })[0];
+  function inCallouts(item) {
+    return calloutRows.some(function(c) { return sameRowIdentity(c, item, ["site", "l1", "l2"]); });
+  }
   var lines = [];
+  calloutRows.forEach(function(item, idx) {
+    var g = num(item, "gap_pp");
+    var route = g <= -5 ? "这是高优先级跑输归因点，需要继续进L3/listing验证。" : (g >= 5 ? "这是跑赢归因点，可复盘该L2的商品和运营动作。" : "差距接近大盘，可作为对照。");
+    lines.push(analysisCalloutLine(
+      idx + 1,
+      "编号" + (idx + 1) + "对应二级品类图中的 " + l2CategoryLabel(item, fallback) + "：占L1 " + formatValue(val(item, "share_in_l1"), "share_in_l1") + "，ADG " + formatCompact(num(item, "adg_mtd") || 0) + "，卖家MoM " + signedPct(num(item, "adg_mom")) + "，大盘MoM " + signedPct(num(item, "mkt_adg_mom")) + "，gap " + signedPp(g) + "；" + route,
+      evidenceChip(model, item, "gap_pp", "gap " + signedPp(g)) + evidenceChip(model, item, "share_in_l1", "占L1 " + formatValue(val(item, "share_in_l1"), "share_in_l1"))
+    ));
+  });
   if (delta) {
     lines.push(analysisLine(
-      rowName(delta) + "是L2层级最大的ADG变化来源，贡献变化 " + (num(delta, "adg_delta") > 0 ? "+" : "") + formatCompact(num(delta, "adg_delta") || 0) + "；它解释了上层L1变化的主要方向。",
+      l2CategoryLabel(delta, fallback) + "是L2层级最大的ADG变化来源，贡献变化 " + (num(delta, "adg_delta") > 0 ? "+" : "") + formatCompact(num(delta, "adg_delta") || 0) + "；它解释了上层L1变化的主要方向。",
       evidenceChip(model, delta, "adg_delta", "ADG变化 " + formatValue(val(delta, "adg_delta"), "adg_delta"))
     ));
   }
-  if (share) {
+  if (share && !inCallouts(share)) {
     lines.push(analysisLine(
-      rowName(share) + "在所属L1内占比最高（" + formatValue(val(share, "share_in_l1"), "share_in_l1") + "），若该L2同时异动，应优先进入L3定位具体子类目。",
+      l2CategoryLabel(share, fallback) + "在所属L1内占比最高（" + formatValue(val(share, "share_in_l1"), "share_in_l1") + "），若该L2同时异动，应优先进入L3定位具体子类目。",
       evidenceChip(model, share, "share_in_l1", "L1内占比 " + formatValue(val(share, "share_in_l1"), "share_in_l1"))
-    ));
-  }
-  if (gap) {
-    lines.push(analysisLine(
-      rowName(gap) + "相对大盘gap为 " + signedPp(num(gap, "gap_pp")) + "；超过5pp且有足够share时，按设计应触发L3粒度诊断。",
-      evidenceChip(model, gap, "gap_pp", "L2 gap " + signedPp(num(gap, "gap_pp")))
     ));
   }
   return lines;
 }
 
 function sectionL3Analysis(model) {
-  var scale = topBy(model, "adg_mtd", { positive: true });
-  var mom = topBy(model, "adg_mom", { abs: true });
-  var p50Rows = model.body.filter(function(item) { return validNumber(num(item, "adg_mom")) && validNumber(num(item, "p50_growth")); });
+  var md = metaDict("sec_l3_granular");
+  var fallback = { l1: md.l1 || "", l2: md.l2 || "" };
+  var rows = model.body.filter(function(item) { return sellerDataPresent(item, ["share_in_l2"]); });
+  rows.forEach(function(item) {
+    var seller = num(item, "adg_mom");
+    var p50 = num(item, "p50_growth");
+    var gapSignal = validNumber(seller) && validNumber(p50) ? Math.abs(seller - p50) : Math.abs(seller || 0);
+    item._calloutScore = gapSignal * Math.max(num(item, "share_in_l2") || 0, 0.5) + Math.log((num(item, "adg_mtd") || 0) + 1) * 2;
+  });
+  var calloutRows = rows.slice().sort(function(a, b) { return (b._calloutScore || 0) - (a._calloutScore || 0); }).slice(0, 3);
+  var scale = rows.slice().sort(function(a, b) { return (num(b, "adg_mtd") || 0) - (num(a, "adg_mtd") || 0); })[0];
+  var mom = rows.slice().sort(function(a, b) { return Math.abs(num(b, "adg_mom") || 0) - Math.abs(num(a, "adg_mom") || 0); })[0];
+  var p50Rows = rows.filter(function(item) { return validNumber(num(item, "adg_mom")) && validNumber(num(item, "p50_growth")); });
   var percentile = p50Rows.slice().sort(function(a, b) {
     return Math.abs((num(b, "adg_mom") || 0) - (num(b, "p50_growth") || 0)) - Math.abs((num(a, "adg_mom") || 0) - (num(a, "p50_growth") || 0));
   })[0];
+  function l3Action(item) {
+    var share = num(item, "share_in_l2") || 0;
+    var seller = num(item, "adg_mom");
+    var p50 = num(item, "p50_growth");
+    if (share >= 20 && validNumber(seller) && seller < -10) return "进入listing验证";
+    if (validNumber(seller) && validNumber(p50) && seller - p50 < -10 && share >= 10) return "复盘对标差距";
+    if (validNumber(seller) && seller > 10) return "正向复制";
+    return "继续观察";
+  }
+  function inCallouts(item) {
+    return calloutRows.some(function(c) { return sameRowIdentity(c, item, ["site", "l1", "l2", "l3"]); });
+  }
   var lines = [];
-  if (scale) {
+  calloutRows.forEach(function(item, idx) {
+    var seller = num(item, "adg_mom");
+    var p50 = num(item, "p50_growth");
+    var gapText = validNumber(seller) && validNumber(p50) ? "，卖家-P50 " + signedPp(seller - p50) : "，当前缺P50，仅作为卖家侧证据";
+    lines.push(analysisCalloutLine(
+      idx + 1,
+      "编号" + (idx + 1) + "对应L3证据表中的 " + l3CategoryLabel(item, fallback) + "：占L2 " + formatValue(val(item, "share_in_l2"), "share_in_l2") + "，ADG " + formatCompact(num(item, "adg_mtd") || 0) + "，卖家MoM " + signedPct(seller) + "，P50 " + signedPct(p50) + gapText + "；建议动作：" + l3Action(item) + "。",
+      evidenceChip(model, item, "adg_mom", "卖家MoM " + signedPct(seller)) + evidenceChip(model, item, "share_in_l2", "占L2 " + formatValue(val(item, "share_in_l2"), "share_in_l2"))
+    ));
+  });
+  if (scale && !inCallouts(scale)) {
     lines.push(analysisLine(
-      "当前有量的L3为 " + rowName(scale) + "，ADG " + formatCompact(num(scale, "adg_mtd") || 0) + "；L3层用于把上层异常落到可行动的子类目。",
+      "当前有量的L3为 " + l3CategoryLabel(scale, fallback) + "，ADG " + formatCompact(num(scale, "adg_mtd") || 0) + "；L3层用于把上层异常落到可行动的子类目。",
       evidenceChip(model, scale, "adg_mtd", "L3 ADG " + formatValue(val(scale, "adg_mtd"), "adg_mtd"))
     ));
   }
-  if (mom) {
+  if (mom && !inCallouts(mom)) {
     lines.push(analysisLine(
-      rowName(mom) + "的L3 MoM为 " + signedPct(num(mom, "adg_mom")) + "；若该变化集中在少数item，应继续用Listing榜验证单品风险。",
+      l3CategoryLabel(mom, fallback) + "的L3 MoM为 " + signedPct(num(mom, "adg_mom")) + "；若该变化集中在少数item，应继续用Listing榜验证单品风险。",
       evidenceChip(model, mom, "adg_mom", "L3 MoM " + signedPct(num(mom, "adg_mom")))
     ));
   }
   if (percentile) {
     var seller = num(percentile, "adg_mom"), p50 = num(percentile, "p50_growth");
     lines.push(analysisLine(
-      rowName(percentile) + "卖家增速" + signedPct(seller) + "，大盘P50为" + signedPct(p50) + "；" + (seller >= p50 ? "说明相对同类卖家不弱。" : "说明正在低于中位数，需要干预。"),
+      l3CategoryLabel(percentile, fallback) + "卖家增速" + signedPct(seller) + "，大盘P50为" + signedPct(p50) + "；" + (seller >= p50 ? "说明相对同类卖家不弱。" : "说明正在低于中位数，需要干预。"),
       evidenceChip(model, percentile, "p50_growth", "P50 " + signedPct(p50))
     ));
   }
@@ -1223,28 +1503,106 @@ function sectionL3Analysis(model) {
 function sectionVolatilityAnalysis(model) {
   var md = metaDict("sec_volatility");
   var counts = parseLooseJson(md.signal_counts, {});
-  var signals = parseLooseJson(md.signals, []);
-  var total = Object.keys(counts).reduce(function(s, k) { return s + (counts[k] || 0); }, 0);
-  signals.sort(function(a, b) { return Math.abs(b.mom || 0) - Math.abs(a.mom || 0); });
+  var signals = volatilityEnrichedSignals(parseLooseJson(md.signals, []), parseLooseJson(md.scatter_data, []));
+  var total = Object.keys(counts).reduce(function(s, k) { return s + (Number(counts[k]) || 0); }, 0);
+  if (!total) total = signals.length;
+  var actionable = volatilityDefaultRows(signals);
+  var lowConfidence = signals.filter(function(s) { return s.lowConfidence; }).length;
   var bySite = {};
-  signals.forEach(function(s) {
-    var site = siteFromPath(s.path);
-    if (site) bySite[site] = (bySite[site] || 0) + 1;
+  actionable.forEach(function(s) {
+    if (s.site) bySite[s.site] = (bySite[s.site] || 0) + 1;
   });
   var topSite = Object.keys(bySite).sort(function(a, b) { return bySite[b] - bySite[a]; })[0];
   var lines = [];
-  lines.push(analysisLine("本月共检出 " + total + " 个波动信号，其中暴跌 " + (counts.VOLATILE_DOWN || 0) + " 个、市场背离 " + (counts.MARKET_DIVERGENT || 0) + " 个、份额迁移 " + (counts.SHARE_SHIFT || 0) + " 个；优先级按暴跌且有量 > 市场背离 > 份额迁移处理。", ""));
-  if (signals.length) {
-    var s0 = signals[0];
-    lines.push(analysisLine("最强波动路径为 " + (s0.path || "—") + "，信号类型 " + (s0.signal || "—") + "，MoM " + signedPct(s0.mom) + "，gap " + signedPp(s0.gap_pp) + "。", ""));
+  lines.push(analysisLine("本月共检出 " + total + " 个波动信号，其中暴跌 " + (counts.VOLATILE_DOWN || 0) + " 个、市场背离 " + (counts.MARKET_DIVERGENT || 0) + " 个、份额迁移 " + (counts.SHARE_SHIFT || 0) + " 个；已将低体量、极端gap、Other/Others泛路径标为低可信，当前可行动队列保留 " + actionable.length + " 条。", ""));
+  actionable.slice(0, 3).forEach(function(s, idx) {
+    lines.push(analysisCalloutLine(
+      idx + 1,
+      "编号" + (idx + 1) + "对应 " + (s.site || "—") + " / " + (s.l2 || s.l1 || "—") + " / " + (s.l3 || "—") + "：" + volatilitySignalLabel(s.signal) + "，卖家MoM " + signedPct(s.mom) + " vs 大盘 " + signedPct(s.market) + "，gap " + signedPp(s.gap_pp) + "，ADG " + formatCompact(s.adg_mtd || 0) + "；建议路由：" + s.route + "。",
+      ""
+    ));
+  });
+  if (!actionable.length && signals.length) {
+    var hidden = signals[0];
+    lines.push(analysisLine("当前信号主要落在低可信池，最高分路径为 " + (hidden.path || "—") + "，但因低体量、极端gap或Other路径需要先做数据/类目确认，再进入卖家动作判断。", ""));
   }
   if (topSite) {
-    lines.push(analysisLine("信号最集中站点为 " + topSite + "（" + bySite[topSite] + "个信号）；如果信号集中在单站点，应优先排查站点级流量、履约或平台政策。", ""));
+    lines.push(analysisLine("可行动信号最集中站点为 " + topSite + "（" + bySite[topSite] + "个）；若集中在单站点，应优先排查该站点的Listing、履约、流量或平台政策变化。", ""));
+  }
+  if (lowConfidence) {
+    lines.push(analysisLine("另有 " + lowConfidence + " 条低可信信号已默认隐藏，主要用于二次审计，不应直接作为卖家结论。", ""));
   }
   return lines;
 }
 
 function sectionShopAnalysis(model) {
+  var enriched = (model.body || []).some(function(item) { return String(val(item, "rank_type") || ""); });
+  if (enriched) {
+    function byType(type) {
+      return model.body.filter(function(item) { return String(val(item, "rank_type") || "") === type; })
+        .sort(function(a, b) { return (num(a, "rank") || 0) - (num(b, "rank") || 0); });
+    }
+    function shopLabel(item) {
+      var name = String(val(item, "shop_name") || "").trim();
+      var id = String(val(item, "shop_id") || "").trim();
+      return name ? name + "（" + id + "）" : "店铺" + id;
+    }
+    function signedShopDelta(n) {
+      if (!validNumber(n)) return "—";
+      return (n > 0 ? "+" : "") + formatCompact(n);
+    }
+    var topAdg = byType("top_adg")[0];
+    var topAdo = byType("top_ado")[0];
+    var keyShops = byType("site_key_shop");
+    var gain = keyShops.slice().sort(function(a, b) { return (num(b, "adg_delta") || 0) - (num(a, "adg_delta") || 0); })[0];
+    var loss = keyShops.slice().sort(function(a, b) { return (num(a, "adg_delta") || 0) - (num(b, "adg_delta") || 0); })[0];
+    var l3Gain = byType("l3_price_gain").sort(function(a, b) { return (num(b, "adg_delta") || 0) - (num(a, "adg_delta") || 0); })[0];
+    var l3Loss = byType("l3_price_loss").sort(function(a, b) { return (num(a, "adg_delta") || 0) - (num(b, "adg_delta") || 0); })[0];
+    var siteMap = {};
+    model.body.forEach(function(item) {
+      var site = String(val(item, "site") || "");
+      if (site && site !== "All") siteMap[site] = true;
+    });
+    var lines = [];
+    if (topAdg) {
+      lines.push(analysisLine(
+        "Top ADG店铺是 " + shopLabel(topAdg) + "，当前ADG " + formatCompact(num(topAdg, "adg_mtd") || 0) + "，主要贡献站点为 " + (val(topAdg, "top_site") || val(topAdg, "site") || "—") + "。",
+        evidenceChip(model, topAdg, "adg_mtd", "Top ADG " + formatValue(val(topAdg, "adg_mtd"), "adg_mtd"))
+      ));
+    }
+    if (topAdo) {
+      lines.push(analysisLine(
+        "Top ADO店铺是 " + shopLabel(topAdo) + "，当前ADO " + formatCompact(num(topAdo, "ado_mtd") || 0) + "；用于判断订单量规模是否与GMV贡献一致。",
+        evidenceChip(model, topAdo, "ado_mtd", "Top ADO " + formatValue(val(topAdo, "ado_mtd"), "ado_mtd"))
+      ));
+    }
+    if (gain) {
+      lines.push(analysisLine(
+        "站点key driver中增长最大的是 " + (val(gain, "top_site") || val(gain, "site") || "—") + " 的 " + shopLabel(gain) + "，ADG增量 " + signedShopDelta(num(gain, "adg_delta")) + "；漏斗提示为 " + (val(gain, "primary_driver") || "结构变化") + "，ADIMP变化 " + signedShopDelta(num(gain, "adimp_delta")) + "，点击变化 " + signedShopDelta(num(gain, "adclick_delta")) + "。",
+        evidenceChip(model, gain, "adg_delta", "增长 " + formatValue(val(gain, "adg_delta"), "adg_delta"))
+      ));
+    }
+    if (loss) {
+      lines.push(analysisLine(
+        "站点key driver中流失最大的是 " + (val(loss, "top_site") || val(loss, "site") || "—") + " 的 " + shopLabel(loss) + "，ADG变化 " + signedShopDelta(num(loss, "adg_delta")) + "；漏斗提示为 " + (val(loss, "primary_driver") || "结构变化") + "，需判断是整体流量流失、点击效率下降还是转化率问题。",
+        evidenceChip(model, loss, "adg_delta", "流失 " + formatValue(val(loss, "adg_delta"), "adg_delta"))
+      ));
+    }
+    if (l3Gain) {
+      lines.push(analysisLine(
+        "key shop下钻中，涨幅最大的L3×价格带是 " + (val(l3Gain, "top_site") || val(l3Gain, "site") || "—") + " / " + (val(l3Gain, "l3") || "—") + " / " + (val(l3Gain, "price_range") || "—") + "，ADG增量 " + signedShopDelta(num(l3Gain, "adg_delta")) + "，主要driver为 " + (val(l3Gain, "primary_driver") || "结构变化") + "。",
+        evidenceChip(model, l3Gain, "adg_delta", "L3价格带增长 " + formatValue(val(l3Gain, "adg_delta"), "adg_delta"))
+      ));
+    }
+    if (l3Loss) {
+      lines.push(analysisLine(
+        "key shop下钻中，跌幅最大的L3×价格带是 " + (val(l3Loss, "top_site") || val(l3Loss, "site") || "—") + " / " + (val(l3Loss, "l3") || "—") + " / " + (val(l3Loss, "price_range") || "—") + "，ADG变化 " + signedShopDelta(num(l3Loss, "adg_delta")) + "，主要driver为 " + (val(l3Loss, "primary_driver") || "结构变化") + "。",
+        evidenceChip(model, l3Loss, "adg_delta", "L3价格带流失 " + formatValue(val(l3Loss, "adg_delta"), "adg_delta"))
+      ));
+    }
+    lines.push(analysisLine("本节已按 " + Object.keys(siteMap).length + " 个站点先定位key driver shop，再下钻到这些店铺的L3×价格带与traffic funnel，适合直接转成卖家动作排查清单。", ""));
+    return lines;
+  }
   var up = topBy(model, "adg_delta", { positive: true });
   var down = topBy(model, "adg_delta", { negative: true });
   var share = topBy(model, "share_in_l3", { positive: true });
@@ -1272,105 +1630,88 @@ function sectionShopAnalysis(model) {
 }
 
 function sectionListingAnalysis(model) {
-  var md = metaDict("sec_listing_change");
-  var perSite = parseLooseJson(md.per_site, {});
-  var items = [];
-  Object.keys(perSite || {}).forEach(function(site) {
-    ((perSite[site] || {}).items || []).forEach(function(item) {
-      item._site = site;
-      items.push(item);
-    });
-  });
-  items.sort(function(a, b) { return (b.mtd_adg || 0) - (a.mtd_adg || 0); });
-  var top = items[0];
-  var newCount = items.filter(function(i) { return Number(i.is_new || 0) === 1; }).length;
-  var byBand = {};
-  items.forEach(function(i) { var b = i.price_range || "Unknown"; byBand[b] = (byBand[b] || 0) + (i.mtd_adg || 0); });
-  var band = Object.keys(byBand).sort(function(a, b) { return byBand[b] - byBand[a]; })[0];
-  var cross = parseLooseJson(md.cross_site_items, {});
-  var crossCount = Object.keys(cross || {}).length;
+  var topRows = model.body.filter(function(item) { return val(item, "rank_type") === "top_adg"; });
+  var growthRows = model.body.filter(function(item) { return val(item, "rank_type") === "top_growth"; });
+  var lossRows = model.body.filter(function(item) { return val(item, "rank_type") === "top_loss"; });
+  var top = topRows.slice().sort(function(a, b) { return (num(b, "mtd_adg") || 0) - (num(a, "mtd_adg") || 0); })[0];
+  var gain = growthRows.slice().sort(function(a, b) { return (num(b, "adg_delta") || 0) - (num(a, "adg_delta") || 0); })[0];
+  var loss = lossRows.slice().sort(function(a, b) { return (num(a, "adg_delta") || 0) - (num(b, "adg_delta") || 0); })[0];
+  var newCount = model.body.filter(function(item) { return Number(val(item, "is_new") || 0) === 1; }).length;
   var lines = [];
   if (top) {
-    lines.push(analysisLine("Top listing为 " + (top.item_name || top.item_id || "—").slice(0, 48) + "（" + top._site + "），MTD ADG " + formatCompact(top.mtd_adg || 0) + "，价格带 " + (top.price_range || "—") + "；这是当前单品贡献的第一优先维护对象。", ""));
+    lines.push(analysisLine("卖得最好的listing是 " + (val(top, "item_name") || val(top, "item_id") || "—").slice(0, 48) + "（" + (val(top, "site") || "—") + "），当月ADG " + formatCompact(num(top, "mtd_adg") || 0) + "，价格带 " + (val(top, "price_range") || "—") + "；建议让卖家复盘该商品的标题、价格带、履约和流量共性。", evidenceChip(model, top, "mtd_adg", "Top ADG " + formatValue(val(top, "mtd_adg"), "mtd_adg"))));
   }
-  lines.push(analysisLine("Top listing池中新品数为 " + newCount + "，跨站点重复item数为 " + crossCount + "；新品高说明上新在贡献增长，跨站重合高说明存在GGP级核心爆品。", ""));
-  if (band) {
-    lines.push(analysisLine("Top listing ADG最集中价格带为 " + band + "（约 " + formatCompact(byBand[band]) + " ADG），应与价格带竞争定位章节交叉验证是否贴合大盘需求。", ""));
+  if (gain) {
+    lines.push(analysisLine("增长最多的listing是 " + (val(gain, "item_name") || val(gain, "item_id") || "—").slice(0, 42) + "（" + (val(gain, "site") || "—") + "），ADG变化 " + signedDelta(num(gain, "adg_delta")) + "，当前诊断driver为 " + (val(gain, "primary_driver") || "—") + "。", evidenceChip(model, gain, "adg_delta", "Listing增长 " + formatValue(val(gain, "adg_delta"), "adg_delta"))));
   }
+  if (loss) {
+    lines.push(analysisLine("跌幅最多的listing是 " + (val(loss, "item_name") || val(loss, "item_id") || "—").slice(0, 42) + "（" + (val(loss, "site") || "—") + "），ADG变化 " + signedDelta(num(loss, "adg_delta")) + "；优先检查是否为订单下降、CTR承接弱或下单转化弱。", evidenceChip(model, loss, "adg_delta", "Listing下滑 " + formatValue(val(loss, "adg_delta"), "adg_delta"))));
+  }
+  lines.push(analysisLine("当前Top listing池中新品记录数为 " + newCount + "；本节来自 cncbbi_general.autodeck__dws_item_rpt_mi，item funnel 使用 ADIMP→ADPV→ADO，其中 CTR=ADPV/ADIMP，CR=ADO/ADPV。", ""));
   return lines;
 }
 
 function sectionFulfillmentAnalysis(model) {
-  var fbs = sumCol(model, "fbs"), tpf = sumCol(model, "tpf"), sls = sumCol(model, "sls"), total = sumCol(model, "total");
-  var shares = total > 0 ? { fbs: fbs / total * 100, tpf: tpf / total * 100, sls: sls / total * 100 } : { fbs: 0, tpf: 0, sls: 0 };
-  var dom = Object.keys(shares).sort(function(a, b) { return shares[b] - shares[a]; })[0];
-  var shiftRows = [];
-  ["fbs_shift_pp","tpf_shift_pp","sls_shift_pp"].forEach(function(c) {
-    model.body.forEach(function(item) {
-      var v = num(item, c);
-      if (validNumber(v)) shiftRows.push({ item: item, col: c, value: v });
-    });
-  });
-  shiftRows.sort(function(a, b) { return Math.abs(b.value) - Math.abs(a.value); });
-  var shift = shiftRows[0];
-  var domLabel = dom === "fbs" ? "FBS" : (dom === "tpf" ? "TPF" : "SLS");
+  var topLocal = topBy(model, "local_share", { positive: true });
+  var growLocal = topBy(model, "local_shift_pp", { positive: true });
+  var lowLocal = topBy(model, "local_share", { positive: true, asc: true });
+  var coverageIssue = model.body.filter(function(item) {
+    var c = num(item, "fulfillment_coverage");
+    return validNumber(c) && (c < 95 || c > 105) && (num(item, "total_ado") || 0) > 1;
+  })[0];
   var lines = [];
-  lines.push(analysisLine("整体履约以 " + domLabel + " 为主，占ADO约 " + formatCompact(shares[dom]) + "%；" + (dom === "fbs" && shares[dom] > 60 ? "FBS依赖高，需重点确认CB仓库存。" : dom === "tpf" && shares[dom] > 40 ? "TPF依赖较高，需关注配送速度和服务质量。" : "履约结构需要结合站点迁移判断。"), ""));
-  if (shift) {
-    lines.push(analysisLine(rowName(shift.item) + "发生最大履约迁移，" + prettyCol(shift.col) + " " + signedPp(shift.value) + "；若对应站点/品类ADG下滑，履约迁移可能是根因候选。", evidenceChip(model, shift.item, shift.col, "履约迁移 " + signedPp(shift.value))));
+  if (topLocal) {
+    lines.push(analysisLine(rowName(topLocal) + "本地履约化最高，Local占比 " + formatValue(val(topLocal, "local_share"), "local_share") + "；这类站点适合让卖家复盘FBS/TPF库存和时效收益。", evidenceChip(model, topLocal, "local_share", "Local " + formatValue(val(topLocal, "local_share"), "local_share"))));
+  }
+  if (growLocal) {
+    lines.push(analysisLine(rowName(growLocal) + "本地履约占比提升最快，环比 " + signedPp(num(growLocal, "local_shift_pp")) + "；若该站点增长同步改善，可作为推进本地履约的正样本。", evidenceChip(model, growLocal, "local_shift_pp", "Local MoM " + signedPp(num(growLocal, "local_shift_pp")))));
+  }
+  if (lowLocal) {
+    lines.push(analysisLine(rowName(lowLocal) + "本地履约占比最低（" + formatValue(val(lowLocal, "local_share"), "local_share") + "），是优先push FBS/TPF的站点候选。", evidenceChip(model, lowLocal, "local_share", "Local " + formatValue(val(lowLocal, "local_share"), "local_share"))));
+  }
+  if (coverageIssue) {
+    lines.push(analysisLine(rowName(coverageIssue) + "的FBS+TPF+SLS与总ADO覆盖率为 " + formatValue(val(coverageIssue, "fulfillment_coverage"), "fulfillment_coverage") + "，需要先确认履约字段口径。", evidenceChip(model, coverageIssue, "fulfillment_coverage", "覆盖率 " + formatValue(val(coverageIssue, "fulfillment_coverage"), "fulfillment_coverage"))));
   }
   return lines;
 }
 
 function sectionTrafficAnalysis(model) {
-  var total = sumCol(model, "total");
-  var ch = [
-    { key: "organic", label: "Organic" },
-    { key: "ads", label: "Ads" },
-    { key: "live", label: "Live" },
-    { key: "campaign", label: "Campaign" }
-  ];
-  ch.forEach(function(c) { c.value = sumCol(model, c.key); c.share = total > 0 ? c.value / total * 100 : 0; });
-  ch.sort(function(a, b) { return b.share - a.share; });
-  var worstRows = [];
-  ["organic_mom","ads_mom","live_mom","campaign_mom"].forEach(function(c) {
-    model.body.forEach(function(item) {
-      var v = num(item, c);
-      if (validNumber(v)) worstRows.push({ item: item, col: c, value: v });
-    });
-  });
-  worstRows.sort(function(a, b) { return a.value - b.value; });
-  var worst = worstRows[0];
-  var roas = weightedAvg(model, "roas", "ads");
+  var primary = topBy(model, "ado_mtd", { positive: true });
+  var growth = topBy(model, "ado_delta", { positive: true });
+  var loss = topBy(model, "ado_delta", { negative: true });
   var lines = [];
-  lines.push(analysisLine("渠道结构以 " + ch[0].label + " 为主，占ADG约 " + formatCompact(ch[0].share) + "%；Ads占比约 " + formatCompact((ch.find(function(x){return x.key==='ads';}) || {}).share || 0) + "%，用于判断是否付费流量依赖。", ""));
-  if (worst) {
-    lines.push(analysisLine(rowName(worst.item) + "的" + prettyCol(worst.col) + "下降最明显（" + signedPct(worst.value) + "）；若总ADG同步下滑，则优先检查该渠道动作是否减少。", evidenceChip(model, worst.item, worst.col, prettyCol(worst.col) + " " + signedPct(worst.value))));
+  if (primary) {
+    lines.push(analysisLine("当前最大出单driver是 " + rowName(primary) + "，ADO " + formatCompact(num(primary, "ado_mtd") || 0) + "，占该站点ADO " + formatValue(val(primary, "ado_share"), "ado_share") + "；这是拜访时要先问卖家是否可复制/维持的手段。", evidenceChip(model, primary, "ado_mtd", "ADO " + formatValue(val(primary, "ado_mtd"), "ado_mtd"))));
   }
-  if (validNumber(roas)) {
-    lines.push(analysisLine("按广告ADG加权的ROAS约为 " + formatCompact(roas) + "；若广告占比高且ROAS走弱，应先优化投放效率再扩量。", ""));
+  if (growth) {
+    lines.push(analysisLine("增长最明显的出单手段是 " + rowName(growth) + "，ADO变化 " + signedDelta(num(growth, "ado_delta")) + "；若同站点总ADO增长，应检查该动作是否为主要贡献。", evidenceChip(model, growth, "ado_delta", "ADO增长 " + formatValue(val(growth, "ado_delta"), "ado_delta"))));
   }
+  if (loss) {
+    lines.push(analysisLine("下滑最明显的出单手段是 " + rowName(loss) + "，ADO变化 " + signedDelta(num(loss, "ado_delta")) + "；若卖家总盘下滑，优先排查该来源是否减少投放/活动/补贴。", evidenceChip(model, loss, "ado_delta", "ADO下滑 " + formatValue(val(loss, "ado_delta"), "ado_delta"))));
+  }
+  lines.push(analysisLine("本节来源、广告、补贴、CFS、Campaign不是MECE，同一订单可能重复命中；因此占比只用于定位driver，不能相加为100%。", ""));
   return lines;
 }
 
 function sectionSubsidyAnalysis(model) {
-  var totalSub = sumCol(model, "total_subsidy");
-  var totalAdg = sumCol(model, "total_adg");
-  var load = totalAdg > 0 ? totalSub / totalAdg * 100 : null;
-  var sellerFund = sumCol(model, "seller_item") + sumCol(model, "seller_shipping");
-  var platformFund = sumCol(model, "platform_item") + sumCol(model, "platform_shipping");
-  var high = topBy(model, "subsidy_share", { positive: true });
-  var sellerShare = sellerFund + platformFund > 0 ? sellerFund / (sellerFund + platformFund) * 100 : null;
+  var topLever = topBy(model, "ado_mtd", { positive: true }) || topBy(model, "adg_mtd", { positive: true });
+  var growth = topBy(model, "ado_delta", { positive: true }) || topBy(model, "adg_delta", { positive: true });
+  var highSeller = topBy(model, "seller_funded_share", { positive: true });
+  var highLoad = topBy(model, "subsidy_share", { positive: true });
   var lines = [];
-  if (validNumber(load)) {
-    lines.push(analysisLine("整体补贴负荷为 " + formatCompact(load) + "%（total subsidy / ADG）；" + (load > 40 ? "超过40%高度依赖阈值，增长质量需要谨慎看待。" : load >= 20 ? "处于20-40%中等依赖区间，需监控趋势。" : "低于20%，补贴依赖相对健康。"), ""));
+  if (topLever) {
+    lines.push(analysisLine("当前最有效促销/补贴手段是 " + rowName(topLever) + "，ADO " + formatCompact(num(topLever, "ado_mtd") || 0) + "，ADG " + formatCompact(num(topLever, "adg_mtd") || 0) + "；这个手段应与订单来源章节合并判断是否真实促成出单。", evidenceChip(model, topLever, "ado_mtd", "促销ADO " + formatValue(val(topLever, "ado_mtd"), "ado_mtd"))));
   }
-  if (high) {
-    lines.push(analysisLine(rowName(high) + "补贴占比最高，达到 " + formatValue(val(high, "subsidy_share"), "subsidy_share") + "；若该站点增长较快，需要判断是否由补贴购买增长。", evidenceChip(model, high, "subsidy_share", "补贴占比 " + formatValue(val(high, "subsidy_share"), "subsidy_share"))));
+  if (growth) {
+    lines.push(analysisLine("促销增长最明显的是 " + rowName(growth) + "，ADO变化 " + signedDelta(num(growth, "ado_delta")) + "；若增长来自平台手段，可推动卖家承接库存和价格。", evidenceChip(model, growth, "ado_delta", "促销增长 " + formatValue(val(growth, "ado_delta"), "ado_delta"))));
   }
-  if (validNumber(sellerShare)) {
-    lines.push(analysisLine("卖家出资占卖家+平台补贴约 " + formatCompact(sellerShare) + "%；卖家出资占比越高，利润率压力越需要纳入拜访讨论。", ""));
+  if (highSeller) {
+    lines.push(analysisLine(rowName(highSeller) + "卖家出资占比最高（" + formatValue(val(highSeller, "seller_funded_share"), "seller_funded_share") + "），需要和卖家确认利润率是否能支撑继续加码。", evidenceChip(model, highSeller, "seller_funded_share", "卖家出资 " + formatValue(val(highSeller, "seller_funded_share"), "seller_funded_share"))));
   }
+  if (highLoad) {
+    lines.push(analysisLine(rowName(highLoad) + "整体补贴负荷最高，total subsidy / ADG 为 " + formatValue(val(highLoad, "subsidy_share"), "subsidy_share") + "；若增长也集中在该站点，要判断是否为补贴买量。", evidenceChip(model, highLoad, "subsidy_share", "补贴负荷 " + formatValue(val(highLoad, "subsidy_share"), "subsidy_share"))));
+  }
+  lines.push(analysisLine("本节促销、补贴、CFS、Campaign、LPP不是MECE，适合判断哪类动作更能促成出单，不适合把占比相加。", ""));
   return lines;
 }
 
@@ -1394,22 +1735,30 @@ function sectionPriceAnalysis(model) {
 function sectionAmsAnalysis(model) {
   var roasHigh = topBy(model, "roas", { positive: true });
   var roasLow = topBy(model, "roas", { positive: true, asc: true });
-  var adsShare = topBy(model, "ads_share", { positive: true });
-  var spendDown = topBy(model, "spend_mom", { negative: true });
-  var avgRoas = weightedAvg(model, "roas", "ads_adg");
+  var adsShare = topBy(model, "ads_adg_share", { positive: true });
+  var spendLoad = topBy(model, "ads_spend_gmv", { positive: true });
+  var spendDown = topBy(model, "ads_spend_mom", { negative: true });
+  var avgRoas = weightedAvg(model, "roas", "ads_spend");
   var lines = [];
   if (validNumber(avgRoas)) {
-    lines.push(analysisLine("按广告ADG加权ROAS约为 " + formatCompact(avgRoas) + "；ROAS>5可考虑扩量，2-5需监控边际收益，<2优先优化素材/定向。", ""));
+    lines.push(analysisLine("按广告花费加权的站点ROAS约为 " + formatCompact(avgRoas) + "；ROAS>5可考虑扩量，2-5需监控边际收益，<2优先优化素材/定向。", ""));
   }
   if (roasHigh) {
-    lines.push(analysisLine(rowName(roasHigh) + "广告效率最高，ROAS " + formatValue(val(roasHigh, "roas"), "roas") + "，是加投候选。", evidenceChip(model, roasHigh, "roas", "ROAS " + formatValue(val(roasHigh, "roas"), "roas"))));
+    lines.push(analysisLine(rowName(roasHigh) + "ADS效率最高，ROAS " + formatValue(val(roasHigh, "roas"), "roas") + "，是加投候选。", evidenceChip(model, roasHigh, "roas", "ROAS " + formatValue(val(roasHigh, "roas"), "roas"))));
   }
   if (adsShare) {
-    lines.push(analysisLine(rowName(adsShare) + "广告GMV占比最高（" + formatValue(val(adsShare, "ads_share"), "ads_share") + "）；若>50%，预算波动会直接影响GMV。", evidenceChip(model, adsShare, "ads_share", "Ads share " + formatValue(val(adsShare, "ads_share"), "ads_share"))));
+    lines.push(analysisLine(rowName(adsShare) + "ADS ADG占比最高（" + formatValue(val(adsShare, "ads_adg_share"), "ads_adg_share") + "），说明该站点对广告出单依赖最高；若预算波动，总GMV也会更敏感。", evidenceChip(model, adsShare, "ads_adg_share", "Ads ADG% " + formatValue(val(adsShare, "ads_adg_share"), "ads_adg_share"))));
+  }
+  if (spendLoad) {
+    lines.push(analysisLine(rowName(spendLoad) + "Spend/GMV最高（" + formatValue(val(spendLoad, "ads_spend_gmv"), "ads_spend_gmv") + "），需要和ROAS一起判断是否高投入低回报。", evidenceChip(model, spendLoad, "ads_spend_gmv", "Spend/GMV " + formatValue(val(spendLoad, "ads_spend_gmv"), "ads_spend_gmv"))));
+  }
+  if (roasLow && (num(roasLow, "ads_spend") || 0) > 0) {
+    lines.push(analysisLine(rowName(roasLow) + "ROAS最低（" + formatValue(val(roasLow, "roas"), "roas") + "），若同时Spend/GMV较高，应先优化投放效率再扩量。", evidenceChip(model, roasLow, "roas", "低ROAS " + formatValue(val(roasLow, "roas"), "roas"))));
   }
   if (spendDown) {
-    lines.push(analysisLine(rowName(spendDown) + "广告支出MoM下降 " + signedPct(num(spendDown, "spend_mom")) + "；若同站点ADG下降，可能是广告削减导致。", evidenceChip(model, spendDown, "spend_mom", "Spend MoM " + signedPct(num(spendDown, "spend_mom")))));
+    lines.push(analysisLine(rowName(spendDown) + "广告支出MoM下降 " + signedPct(num(spendDown, "ads_spend_mom")) + "；若同站点ADG下降，可能是广告削减导致。", evidenceChip(model, spendDown, "ads_spend_mom", "Spend MoM " + signedPct(num(spendDown, "ads_spend_mom")))));
   }
+  lines.push(analysisLine("HE1 Ads ADG% 当前按 ads_adg / total_adg 计算，因为raw_dws_shop没有独立HE1字段；后续若BI补字段，可直接替换该列。", ""));
   return lines;
 }
 
@@ -1499,7 +1848,8 @@ function analysisHtml(model) {
 // visualHtml dispatcher — calls per-section chart functions
 function visualHtml(model) {
   // Sections with _meta tabs may have data despite empty main tab
-  var hasMetaTab = (window.AUTODECK_LOCAL_DATA && window.AUTODECK_LOCAL_DATA.tabs && window.AUTODECK_LOCAL_DATA.tabs[model.id + "_meta"]);
+  var tabs = activeTabs();
+  var hasMetaTab = tabs && tabs[model.id + "_meta"];
   if (!model.rowCount && model.chartType !== "meta" && !hasMetaTab) return emptyStateChart(model);
 
   var id = model.id;
@@ -1536,6 +1886,7 @@ function visualHtml(model) {
 function renderReport(payload) {
   var root = document.getElementById("report-root");
   payload = payload || window.AUTODECK_LOCAL_DATA || {};
+  window.AUTODECK_ACTIVE_DATA = payload;
   var tabs = payload.tabs || {};
   var configs = getSectionConfigs(tabs);
   getTextTemplates(tabs);
