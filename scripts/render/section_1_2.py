@@ -2,278 +2,178 @@
 """
 Section 1.2 — L1 Category Overview (一级品类总览)
 
-NO chart. Table-only display:
-  - Multi-select site filter (pill-style), default all sites selected
-  - Top 5 Gainer L1s (by MoM%) in selected sites
-  - Top 5 Loser L1s (by MoM%) in selected sites
-  - Each row: L1, Site, ADG MTD, Seller MoM%, Market MoM%, Gap pp, Share%
-  - Market benchmark comparison (mkt_adg_mom, gap_pp)
-  - Data source: sec_l1_matrix tab (site × L1 granularity)
+Primary visual:
+  - Site x L1 diagnostic matrix
+  - Cell color = seller MoM gap versus market MoM
+  - In-cell bar = L1 ADG share within the site
+  - Circular 1/2/3 markers = highest-priority drilldown cells
+
+The visual intentionally does not use a site filter: the matrix itself is the
+site comparison surface, and the engine renders a filterable evidence table
+after the primary visual.
 """
 
 from __future__ import annotations
 
 
 def l1_overview_table_js() -> str:
-    """Multi-select site filter + dual Top5 gainer/loser tables."""
+    """Site x L1 diagnostic matrix with priority callouts."""
     return r"""
 function l1OverviewChart(model) {
-  // Read from sec_l1_matrix for site×L1 granularity
-  var tabs = (window.AUTODECK_LOCAL_DATA && window.AUTODECK_LOCAL_DATA.tabs) || {};
-  var matrixRows = tabs.sec_l1_matrix || [];
-  var matrixModel = rowsModel(matrixRows);
+  var tabs = ((window.AUTODECK_ACTIVE_DATA && window.AUTODECK_ACTIVE_DATA.tabs) ||
+              (window.AUTODECK_LOCAL_DATA && window.AUTODECK_LOCAL_DATA.tabs) || {});
+  var matrixModel = rowsModel(tabs.sec_l1_matrix || []);
+  if (!matrixModel.body.length) matrixModel = model;
+  if (!matrixModel || !matrixModel.body.length) return emptyStateChart(model);
 
-  if (!matrixModel.body.length) return emptyStateChart(model);
+  function pct(n) {
+    if (n == null || !isFinite(n)) return "—";
+    return (n > 0 ? "+" : "") + formatCompact(n) + "%";
+  }
+  function pp(n) {
+    if (n == null || !isFinite(n)) return "—";
+    return (n > 0 ? "+" : "") + formatCompact(n) + "pp";
+  }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function label(s, maxLen) {
+    s = String(s == null ? "" : s);
+    return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
+  }
+  function rowKey(site, l1) { return site + "||" + l1; }
+  function hasSellerData(adg, prev, share, mom) {
+    return (adg != null && adg > 0) ||
+           (prev != null && prev > 0) ||
+           (share != null && share > 0) ||
+           (mom != null && isFinite(mom));
+  }
+  function gapOf(item) {
+    var g = num(item, "gap_pp");
+    if (g == null) g = num(item, "adg_gap_pp");
+    return g;
+  }
+  function cellBg(gap) {
+    if (gap == null || !isFinite(gap)) return "#f5f6f8";
+    var opacity = clamp(0.12 + Math.abs(gap) / 140, 0.14, 0.48);
+    return gap >= 0 ? "rgba(33,163,102," + opacity.toFixed(3) + ")" : "rgba(238,77,45," + opacity.toFixed(3) + ")";
+  }
 
-  // ── 1. Extract unique sites and L1s ──
-  var allSites = {}, l1Set = {};
+  var byKey = {};
+  var siteTotals = {};
+  var l1Totals = {};
+  var rows = [];
   matrixModel.body.forEach(function(item) {
-    var s = String(val(item, "site") || "").trim();
-    var l = String(val(item, "l1") || "").trim();
-    if (s) allSites[s] = true;
-    if (l) l1Set[l] = true;
-  });
-  var siteList = Object.keys(allSites).sort();
-
-  // ── 2. Pattern detection from matrix data ──
-  var totalPairs = matrixModel.body.length;
-  var anomalyPairs = 0;
-  var siteAnomalyCount = {}, l1AnomalyCount = {};
-  matrixModel.body.forEach(function(item) {
-    var gap = num(item, "gap_pp");
-    var s = String(val(item, "site") || "").trim();
-    var l = String(val(item, "l1") || "").trim();
-    if (gap != null && Math.abs(gap) > 5) {
-      anomalyPairs++;
-      siteAnomalyCount[s] = (siteAnomalyCount[s] || 0) + 1;
-      l1AnomalyCount[l] = (l1AnomalyCount[l] || 0) + 1;
-    }
-  });
-  var patternSites = Object.keys(siteAnomalyCount).filter(function(s) { return siteAnomalyCount[s] >= Object.keys(l1AnomalyCount).length * 0.4; });
-  var patternL1s = Object.keys(l1AnomalyCount).filter(function(l) { return l1AnomalyCount[l] >= siteList.length * 0.4; });
-  var patternLabel = "";
-  if (patternSites.length && patternL1s.length) patternLabel = "Mixed signals across sites and categories";
-  else if (patternSites.length) patternLabel = "Site-driven: " + patternSites.join(", ");
-  else if (patternL1s.length) patternLabel = "Category-driven: " + patternL1s.join(", ");
-  else patternLabel = "Isolated anomalies — no broad pattern";
-
-  // ── 3. Build site filter pills (multi-select, all default selected) ──
-  var filterId = "l1-site-filter-" + Math.random().toString(36).slice(2, 6);
-  var html = '<div id="' + filterId + '" class="site-filter-bar" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 0;align-items:center">';
-  html += '<span style="font-size:11px;color:var(--muted);font-weight:650;margin-right:4px">Site:</span>';
-  html += '<button class="site-pill active" data-site="__ALL__" style="border:1px solid var(--line);border-radius:14px;padding:3px 10px;font-size:11px;cursor:pointer;background:var(--ink);color:#fff;border-color:var(--ink)">All (' + siteList.length + ')</button>';
-  siteList.forEach(function(s) {
-    html += '<button class="site-pill active" data-site="' + esc(s) + '" style="border:1px solid var(--line);border-radius:14px;padding:3px 10px;font-size:11px;cursor:pointer;background:var(--accent-soft);color:var(--accent-dark);border-color:var(--accent)">' + esc(s) + '</button>';
-  });
-  html += '</div>';
-
-  // ── 3b. Heatmap: site × L1 MoM% ──
-  var l1List = Object.keys(l1Set).sort();
-  var heatData = [];
-  var maxAbsMom = 5;
-  matrixModel.body.forEach(function(item) {
-    var s = String(val(item, "site") || "").trim();
-    var l = String(val(item, "l1") || "").trim();
+    var site = String(val(item, "site") || "").trim();
+    var l1 = String(val(item, "l1") || "").trim();
+    if (!site || !l1) return;
+    var adgRaw = num(item, "adg_mtd");
+    var prevRaw = num(item, "adg_m1");
+    var shareRaw = num(item, "share_in_site");
+    if (shareRaw == null) shareRaw = num(item, "adg_share");
     var mom = num(item, "adg_mom");
-    if (!s || !l) return;
-    if (mom != null) maxAbsMom = Math.max(maxAbsMom, Math.abs(mom));
-    heatData.push([l1List.indexOf(l), siteList.indexOf(s), mom != null ? parseFloat(mom.toFixed(1)) : 0]);
+    if (!hasSellerData(adgRaw, prevRaw, shareRaw, mom)) return;
+    var adg = adgRaw || 0;
+    var prev = prevRaw || 0;
+    var share = shareRaw || 0;
+    var mkt = num(item, "mkt_adg_mom");
+    var gap = gapOf(item);
+    var scale = Math.max(adg, prev);
+    var entry = { item: item, site: site, l1: l1, adg: adg, prev: prev, share: share, mom: mom, mkt: mkt, gap: gap };
+    byKey[rowKey(site, l1)] = entry;
+    rows.push(entry);
+    siteTotals[site] = (siteTotals[site] || 0) + scale;
+    l1Totals[l1] = (l1Totals[l1] || 0) + scale;
   });
 
-  var heatmapId = "l1-heat-" + Math.random().toString(36).slice(2, 6);
-  html += '<div id="' + heatmapId + '" style="width:100%;height:' + Math.max(180, siteList.length * 28 + 50) + 'px;margin:6px 0" role="img" aria-label="Site×L1 MoM% heatmap"></div>';
+  if (!rows.length) return emptyStateChart(model);
 
-  setTimeout(function() {
-    var dom = document.getElementById(heatmapId);
-    if (!dom) return;
-    function tryInitHeatmap() {
-      if (dom.clientWidth === 0) { setTimeout(tryInitHeatmap, 150); return; }
-      var existing = echarts.getInstanceByDom(dom);
-      if (existing) existing.dispose();
-      var chart = echarts.init(dom);
-      chart.setOption({
-      tooltip: {
-        backgroundColor: "rgba(32,33,36,.94)", borderColor: "transparent",
-        textStyle: { color: "#fff", fontSize: 12 },
-        formatter: function(p) { return "<strong>" + siteList[p.value[1]] + " × " + l1List[p.value[0]] + "</strong><br>MoM: " + formatCompact(p.value[2]) + "%"; }
-      },
-      grid: { left: 50, right: 30, top: 5, bottom: 60 },
-      xAxis: { type: "category", data: l1List, position: "bottom", axisLabel: { fontSize: 10, rotate: l1List.length > 4 ? 20 : 0 } },
-      yAxis: { type: "category", data: siteList, axisLabel: { fontSize: 11, fontWeight: 700 } },
-      visualMap: { min: -maxAbsMom, max: maxAbsMom, calculable: true, orient: "horizontal", left: "center", bottom: 0,
-        inRange: { color: ["#137a4b", "#ffffff", "#ee4d2d"] }, text: ["+MoM%", "−MoM%"], textStyle: { fontSize: 9 } },
-      series: [{ type: "heatmap", data: heatData, label: { show: true, fontSize: 9,
-        formatter: function(p) { var v = p.value[2]; return v === 0 ? "" : formatCompact(v) + "%"; }
-      }, emphasis: { itemStyle: { shadowBlur: 8 } } }]
-    });
-    var ro = new ResizeObserver(function() { chart.resize(); });
-    ro.observe(dom);
-    dom._resizeObserver = ro;
-    }
-    tryInitHeatmap();
-  }, 180);
+  var sites = Object.keys(siteTotals).sort(function(a, b) { return siteTotals[b] - siteTotals[a]; });
+  var l1s = Object.keys(l1Totals).sort(function(a, b) { return l1Totals[b] - l1Totals[a]; });
+  var priorityCandidates = rows.filter(function(r) { return r.gap != null && (r.adg > 0 || r.share > 0); });
+  priorityCandidates.sort(function(a, b) {
+    var sa = Math.abs(a.gap || 0) * Math.max(a.share || 0, 0.5);
+    var sb = Math.abs(b.gap || 0) * Math.max(b.share || 0, 0.5);
+    return sb - sa;
+  });
+  var priorities = priorityCandidates.slice(0, 3);
+  var calloutByKey = {};
+  priorities.forEach(function(r, idx) { calloutByKey[rowKey(r.site, r.l1)] = idx + 1; });
 
-  // ── 4. Build filtered data function (site×L1 granularity, no aggregation) ──
-  var buildTables = function(activeSites) {
-    // Filter rows — keep site×L1 pairs separate, never merge sites
-    var filtered = matrixModel.body.filter(function(item) {
-      var s = String(val(item, "site") || "").trim();
-      return activeSites.__ALL__ || activeSites[s];
-    });
+  var topL1 = {};
+  l1s.slice(0, 8).forEach(function(l) { topL1[l] = true; });
+  priorities.forEach(function(r) { topL1[r.l1] = true; });
+  l1s = l1s.filter(function(l) { return topL1[l]; });
 
-    // Convert to entries with site + L1 identity
-    var entries = [];
-    filtered.forEach(function(item) {
-      var site = String(val(item, "site") || "").trim();
-      var l1 = String(val(item, "l1") || "").trim();
-      var adg = num(item, "adg_mtd") || 0;
-      var mom = num(item, "adg_mom");
-      var mktMom = num(item, "mkt_adg_mom");
-      var gap = num(item, "gap_pp");
-      var share = num(item, "share_in_site") || 0;
-      if (!site || !l1) return;
-      entries.push({ site: site, l1: l1, adg_mtd: adg, adg_mom: mom, mkt_adg_mom: mktMom, gap_pp: gap, share_pct: share });
-    });
+  var style = [
+    '<style>',
+    '.cat-drill-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(300px,.62fr);gap:12px;margin:8px 0 12px}',
+    '.cat-panel{border:1px solid var(--line);background:#fff;padding:10px;min-width:0}',
+    '.cat-matrix-wrap{overflow:auto}',
+    '.cat-l1-matrix{border-collapse:collapse;width:100%;min-width:760px}',
+    '.cat-l1-matrix th{background:#3f4146;color:#fff;border:1px solid #fff;padding:7px 8px;font-size:11px;white-space:nowrap}',
+    '.cat-l1-matrix th:first-child{position:sticky;left:0;z-index:2}',
+    '.cat-l1-matrix .site-head{position:sticky;left:0;z-index:1;background:#3f4146;color:#fff;min-width:48px}',
+    '.cat-cell{position:relative;min-width:150px;height:74px;border:1px solid #fff;padding:8px;vertical-align:top}',
+    '.cat-cell:hover{outline:2px solid var(--accent);outline-offset:-2px}',
+    '.cat-cell-empty{background:#fff;color:transparent;border-color:#fff;text-align:center;font-size:12px}',
+    '.cat-cell-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;font-size:11px}',
+    '.cat-cell-top b{font-size:15px;color:#111827}',
+    '.cat-cell-foot{font-size:11px;color:#4d5662;margin-top:6px;white-space:nowrap}',
+    '.cat-sharebar{height:7px;background:#fff;border:1px solid rgba(0,0,0,.12);margin-top:7px;overflow:hidden}',
+    '.cat-sharebar i{display:block;height:100%;background:var(--accent);opacity:.78}',
+    '.cat-callout{position:absolute;top:5px;right:6px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:900;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.15)}',
+    '.cat-priority-list{display:grid;gap:8px}',
+    '.cat-priority-row{display:grid;grid-template-columns:26px 1fr auto;gap:8px;align-items:center;padding:8px;background:#f7f8fa;border:1px solid #e6e9ee}',
+    '.cat-priority-row .num{width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:900}',
+    '.cat-priority-row b{font-size:12px}.cat-priority-row small{display:block;color:var(--muted);margin-top:2px}.cat-risk{color:var(--down);font-weight:800}.cat-up{color:var(--up);font-weight:800}',
+    '.cat-caption{font-size:11px;color:var(--muted);line-height:1.45;margin:0 0 8px}',
+    '@media(max-width:1000px){.cat-drill-grid{grid-template-columns:1fr}.cat-panel{overflow:auto}}',
+    '</style>'
+  ].join('');
 
-    // Sort by MoM% for gainers and losers
-    var gainers = entries.filter(function(e) { return e.adg_mom != null && e.adg_mom > 0; });
-    var losers = entries.filter(function(e) { return e.adg_mom != null && e.adg_mom < 0; });
+  var html = style;
+  html += '<div class="cat-caption">颜色=卖家增速 vs 大盘增速差距；横条=该一级品类在站点内的ADG占比；编号=优先下钻入口。</div>';
+  html += '<div class="cat-drill-grid">';
+  html += '<div class="cat-panel cat-matrix-wrap">';
+  html += '<table class="cat-l1-matrix"><thead><tr><th>Site</th>';
+  l1s.forEach(function(l1) { html += '<th title="' + esc(l1) + '">' + esc(label(l1, 24)) + '</th>'; });
+  html += '</tr></thead><tbody>';
 
-    gainers.sort(function(a, b) { return b.adg_mom - a.adg_mom; });
-    losers.sort(function(a, b) { return a.adg_mom - b.adg_mom; });
-
-    var topGainers = gainers.slice(0, 5);
-    var topLosers = losers.slice(0, 5);
-
-    // ── Render table (site × L1 granularity) ──
-    var renderTable = function(title, rows, tone) {
-      var t = '<div style="margin-bottom:12px">';
-      t += '<div style="font-size:12px;font-weight:700;padding:6px 0;color:var(--' + (tone === 'up' ? 'up' : 'down') + ')">' + title + '</div>';
-      if (!rows.length) {
-        t += '<div class="muted" style="padding:8px;font-size:11px">No ' + (tone === 'up' ? 'gainers' : 'losers') + ' in selected sites</div>';
-      } else {
-        t += '<table class="report-table"><thead><tr>';
-        t += '<th>Site</th><th>L1</th><th>ADG MTD</th><th>MoM%</th><th>Market MoM%</th><th>Gap</th><th>Share%</th>';
-        t += '</tr></thead><tbody>';
-        rows.forEach(function(r) {
-          var momTone = r.adg_mom > 0 ? 'up-text' : 'dn-text';
-          var gapTone = r.gap_pp != null ? (r.gap_pp > 0 ? 'up-text' : 'dn-text') : '';
-          t += '<tr>';
-          t += '<td>' + esc(r.site) + '</td>';
-          t += '<td><strong>' + esc(r.l1) + '</strong></td>';
-          t += '<td>' + formatCompact(r.adg_mtd) + '</td>';
-          t += '<td class="' + momTone + '">' + (r.adg_mom != null ? formatCompact(r.adg_mom) + '%' : '—') + '</td>';
-          t += '<td>' + (r.mkt_adg_mom != null ? formatCompact(r.mkt_adg_mom) + '%' : '—') + '</td>';
-          t += '<td class="' + gapTone + '">' + (r.gap_pp != null ? formatCompact(r.gap_pp) + 'pp' : '—') + '</td>';
-          t += '<td>' + (r.share_pct > 0 ? formatCompact(r.share_pct) + '%' : '—') + '</td>';
-          t += '</tr>';
-        });
-        t += '</tbody></table>';
-      }
-      t += '</div>';
-      return t;
-    };
-
-    return renderTable('⬆ Top 5 Rising (Site × L1)', topGainers, 'up') +
-           renderTable('⬇ Top 5 Falling (Site × L1)', topLosers, 'down');
-  };
-
-  // ── 4. Pattern summary + initial tables ──
-  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">';
-  html += '<div class="metric-card" style="flex:1 1 140px;min-width:120px"><div class="label">Site × L1 Pairs</div><div class="value" style="font-size:16px">' + totalPairs + '</div><div class="context">' + siteList.length + ' sites × ' + Object.keys(l1AnomalyCount).length + ' L1s</div></div>';
-  html += '<div class="metric-card" style="flex:1 1 140px;min-width:120px"><div class="label">Anomalies (|gap|>5pp)</div><div class="value" style="font-size:16px">' + anomalyPairs + '</div><div class="context">of ' + totalPairs + ' pairs</div></div>';
-  html += '<div class="metric-card" style="flex:2 1 240px;min-width:200px"><div class="label">Pattern</div><div class="value" style="font-size:13px">' + patternLabel + '</div></div>';
-  html += '</div>';
-
-  var tableContainerId = "l1-tables-" + Math.random().toString(36).slice(2, 6);
-  html += '<div id="' + tableContainerId + '" style="margin-top:8px">';
-  html += buildTables({ __ALL__: true });
-  html += '</div>';
-
-  // ── 5. Bind filter interactions ──
-  setTimeout(function() {
-    var filterBar = document.getElementById(filterId);
-    if (!filterBar) return;
-
-    filterBar.addEventListener("click", function(e) {
-      var pill = e.target.closest(".site-pill");
-      if (!pill) return;
-
-      var site = pill.getAttribute("data-site");
-
-      if (site === "__ALL__") {
-        // Toggle All: if All is already active, deactivate all. Otherwise activate all.
-        var allActive = pill.classList.contains("active");
-        var pills = filterBar.querySelectorAll(".site-pill");
-        pills.forEach(function(p) {
-          if (allActive) {
-            p.classList.remove("active");
-            p.style.background = "#fff";
-            p.style.color = "var(--ink)";
-            p.style.borderColor = "var(--line)";
-          } else {
-            p.classList.add("active");
-            if (p.getAttribute("data-site") === "__ALL__") {
-              p.style.background = "var(--ink)";
-              p.style.color = "#fff";
-              p.style.borderColor = "var(--ink)";
-            } else {
-              p.style.background = "var(--accent-soft)";
-              p.style.color = "var(--accent-dark)";
-              p.style.borderColor = "var(--accent)";
-            }
-          }
-        });
-      } else {
-        // Toggle individual site
-        var wasActive = pill.classList.contains("active");
-        if (wasActive) {
-          pill.classList.remove("active");
-          pill.style.background = "#fff";
-          pill.style.color = "var(--ink)";
-          pill.style.borderColor = "var(--line)";
-        } else {
-          pill.classList.add("active");
-          pill.style.background = "var(--accent-soft)";
-          pill.style.color = "var(--accent-dark)";
-          pill.style.borderColor = "var(--accent)";
-        }
-        // Update All button state
-        var allBtn = filterBar.querySelector('[data-site="__ALL__"]');
-        var anyInactive = filterBar.querySelectorAll('.site-pill[data-site]:not([data-site="__ALL__"]):not(.active)');
-        if (anyInactive.length > 0 && allBtn) {
-          allBtn.classList.remove("active");
-          allBtn.style.background = "#fff";
-          allBtn.style.color = "var(--ink)";
-          allBtn.style.borderColor = "var(--line)";
-        } else if (allBtn && anyInactive.length === 0) {
-          allBtn.classList.add("active");
-          allBtn.style.background = "var(--ink)";
-          allBtn.style.color = "#fff";
-          allBtn.style.borderColor = "var(--ink)";
-        }
-      }
-
-      // Collect active sites
-      var activePills = filterBar.querySelectorAll('.site-pill.active[data-site]:not([data-site="__ALL__"])');
-      var activeSites = {};
-      activePills.forEach(function(p) { activeSites[p.getAttribute("data-site")] = true; });
-
-      // If all individual sites active, treat as ALL
-      if (activePills.length === siteList.length) {
-        activeSites = { __ALL__: true };
-      }
-      if (activePills.length === 0) {
-        // Nothing selected — show empty state
-        document.getElementById(tableContainerId).innerHTML = '<div class="muted" style="padding:16px">Select at least one site to view L1 data.</div>';
+  sites.forEach(function(site) {
+    html += '<tr><th class="site-head">' + esc(site) + '</th>';
+    l1s.forEach(function(l1) {
+      var r = byKey[rowKey(site, l1)];
+      if (!r) {
+        html += '<td class="cat-cell cat-cell-empty"></td>';
         return;
       }
-
-      // Rebuild tables
-      document.getElementById(tableContainerId).innerHTML = buildTables(activeSites);
+      var c = calloutByKey[rowKey(site, l1)];
+      var gapClass = r.gap == null ? '' : (r.gap >= 0 ? 'cat-up' : 'cat-risk');
+      html += '<td class="cat-cell" style="background:' + cellBg(r.gap) + '" title="' + esc(site + ' × ' + l1) + '">';
+      if (c) html += '<span class="cat-callout">' + c + '</span>';
+      html += '<div class="cat-cell-top"><b>' + pct(r.mom) + '</b><span class="' + gapClass + '">' + pp(r.gap) + '</span></div>';
+      html += '<div class="cat-sharebar"><i style="width:' + clamp(r.share || 0, 0, 100).toFixed(1) + '%"></i></div>';
+      html += '<div class="cat-cell-foot">' + formatCompact(r.adg) + ' ADG · ' + formatCompact(r.share || 0) + '%</div>';
+      html += '</td>';
     });
-  }, 100);
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
 
+  html += '<div class="cat-panel"><div class="cat-caption">优先级按 |gap pp| × 站点内占比排序，帮助从“站点问题”进入“类目归因”。</div>';
+  html += '<div class="cat-priority-list">';
+  if (!priorities.length) {
+    html += '<div class="muted">暂无可排序的站点×一级品类差距。</div>';
+  } else {
+    priorities.forEach(function(r, idx) {
+      var tone = r.gap != null && r.gap >= 0 ? 'cat-up' : 'cat-risk';
+      html += '<div class="cat-priority-row">';
+      html += '<span class="num">' + (idx + 1) + '</span>';
+      html += '<div><b>' + esc(r.site) + ' × ' + esc(label(r.l1, 32)) + '</b><small>占站点 ' + formatCompact(r.share || 0) + '% · ' + formatCompact(r.adg) + ' ADG</small></div>';
+      html += '<span class="' + tone + '">' + pp(r.gap) + '</span>';
+      html += '</div>';
+    });
+  }
+  html += '</div></div></div>';
   return html;
 }
 """
